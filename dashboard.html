@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>BOOTH Shelf</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="컬렉션 탐색">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">B</div>
+          <div>
+            <p class="brand-name">BOOTH Shelf</p>
+            <p class="brand-caption">Private library</p>
+          </div>
+          <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="메뉴 닫기">×</button>
+        </div>
+
+        <nav class="collection-nav" aria-labelledby="collection-heading">
+          <p class="sidebar-label" id="collection-heading">컬렉션</p>
+          <button class="nav-row is-active" type="button" data-source="all">
+            <span>전체 상품</span>
+            <span class="nav-count" id="all-count">0</span>
+          </button>
+          <button class="nav-row" type="button" data-source="purchased">
+            <span>구매한 상품</span>
+            <span class="nav-count" id="purchased-count">0</span>
+          </button>
+          <button class="nav-row" type="button" data-source="gift">
+            <span>받은 기프트</span>
+            <span class="nav-count" id="gift-count">0</span>
+          </button>
+          <button class="nav-row" type="button" id="favorites-nav">
+            <span>즐겨찾기</span>
+            <span class="nav-count" id="favorites-count">0</span>
+          </button>
+        </nav>
+
+        <section class="folder-section" aria-labelledby="folder-heading">
+          <div class="sidebar-section-heading">
+            <p class="sidebar-label" id="folder-heading">내 폴더</p>
+            <button class="mini-button" id="add-root-folder" type="button" aria-label="최상위 폴더 추가">＋</button>
+          </div>
+
+          <button class="folder-row folder-system-row is-active" id="all-folders" type="button">
+            <span class="folder-glyph" aria-hidden="true">▰</span>
+            <span class="folder-name">모든 폴더</span>
+          </button>
+          <button class="folder-row folder-system-row" id="unfiled-folder" type="button">
+            <span class="folder-glyph" aria-hidden="true">□</span>
+            <span class="folder-name">미분류</span>
+            <span class="folder-count" id="unfiled-count">0</span>
+          </button>
+
+          <div class="folder-tree" id="folder-tree" role="tree" aria-label="사용자 폴더"></div>
+
+          <div class="folder-actions" id="folder-actions" hidden>
+            <button type="button" id="add-child-folder">하위 추가</button>
+            <button type="button" id="rename-folder">이름 변경</button>
+            <button type="button" id="move-folder">이동</button>
+            <button type="button" id="delete-folder" class="danger-text">삭제</button>
+          </div>
+        </section>
+
+        <div class="sidebar-spacer"></div>
+        <a
+          class="support-link"
+          href="https://ko-fi.com/kuroiineushina"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Ko-fi에서 개발자 후원하기 (새 탭)"
+        >
+          <span class="support-heart" aria-hidden="true">♥</span>
+          <span class="support-copy">
+            <strong>개발자 후원하기</strong>
+            <small>Ko-fi에서 응원 보내기</small>
+          </span>
+          <span class="support-arrow" aria-hidden="true">↗</span>
+        </a>
+        <div class="privacy-note">
+          <span class="privacy-dot" aria-hidden="true"></span>
+          <div>
+            <strong>이 기기에만 저장</strong>
+            <p>상품 정보, 정리 상태, 테마와 결제 합계 캐시는 외부 서버로 전송되지 않으며 언제든 삭제할 수 있습니다.</p>
+            <button class="privacy-clear-button" id="clear-local-data" type="button">저장 데이터 모두 삭제</button>
+          </div>
+        </div>
+        <p class="service-version" id="service-version" aria-label="정식 서비스 버전 1.0">
+          <span>정식 서비스</span>
+          <strong>v1.0</strong>
+        </p>
+      </aside>
+
+      <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="메뉴 닫기"></button>
+
+      <main class="main-panel" id="main-content">
+        <header class="topbar">
+          <button class="icon-button sidebar-open" id="sidebar-open" type="button" aria-label="메뉴 열기">☰</button>
+
+          <div class="search-cluster">
+            <label class="search-box" for="search-input">
+              <span class="search-symbol" aria-hidden="true">⌕</span>
+              <input
+                id="search-input"
+                type="search"
+                aria-label="상품 검색"
+                autocomplete="off"
+                placeholder="상품명이나 판매자명을 검색"
+              >
+              <kbd class="search-shortcut">/</kbd>
+            </label>
+            <label class="field-select compact-select">
+              <span class="sr-only">검색 대상</span>
+              <select id="search-field">
+                <option value="all">전체 검색</option>
+                <option value="title">상품명</option>
+                <option value="seller">판매자명</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="topbar-actions">
+            <button class="red-pill-button" id="red-pill-button" type="button" aria-haspopup="dialog" aria-controls="red-pill-dialog">
+              <span class="red-pill-button-icon" aria-hidden="true">!</span>
+              <span class="button-label">빨간약</span>
+            </button>
+            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="다크 모드로 전환" aria-pressed="false">
+              <span id="theme-toggle-icon" aria-hidden="true">☾</span>
+              <span class="button-label" id="theme-toggle-label">다크</span>
+            </button>
+            <button class="sync-button" id="sync-button" type="button">
+              <span class="sync-symbol" aria-hidden="true">↻</span>
+              <span class="button-label">전체 동기화</span>
+            </button>
+          </div>
+        </header>
+
+        <section class="hero-row" aria-labelledby="view-title">
+          <div>
+            <p class="eyebrow" id="view-eyebrow">내 BOOTH 보관함</p>
+            <h1 id="view-title">전체 상품</h1>
+            <p class="view-description" id="view-description">구매한 상품과 받은 기프트를 한눈에 확인하세요.</p>
+          </div>
+
+          <div class="hero-meta">
+            <div class="sync-meta" id="last-sync">아직 동기화하지 않았어요</div>
+            <label class="field-select sort-select">
+              <span class="sr-only">정렬 방식</span>
+              <select id="sort-select">
+                <option value="purchase">구매순</option>
+                <option value="title-asc">이름 오름차순</option>
+                <option value="title-desc">이름 내림차순</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="sync-panel" id="sync-panel" aria-live="polite" hidden>
+          <div class="sync-panel-copy">
+            <strong id="sync-message">라이브러리 연결 중</strong>
+            <span id="sync-detail">잠시만 기다려 주세요.</span>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div class="progress-value" id="sync-progress"></div>
+          </div>
+          <a class="text-link" id="login-link" href="https://accounts.booth.pm/library" target="_blank" rel="noreferrer" hidden>BOOTH 로그인 열기</a>
+        </section>
+
+        <section class="result-toolbar" aria-label="검색 결과 도구">
+          <p id="result-summary"><strong>0</strong>개의 상품</p>
+          <button class="clear-filter" id="clear-filter" type="button" hidden>필터 초기화</button>
+        </section>
+
+        <section class="item-grid" id="item-grid" aria-label="상품 목록"></section>
+
+        <section class="empty-state" id="empty-state" hidden>
+          <div class="empty-monogram" aria-hidden="true">B</div>
+          <h2 id="empty-title">라이브러리를 불러와 주세요</h2>
+          <p id="empty-description">BOOTH에 로그인한 뒤 전체 동기화를 누르면 구매 상품과 기프트를 읽어옵니다.</p>
+          <div class="empty-actions">
+            <button class="primary-button" id="empty-sync-button" type="button">지금 전체 불러오기</button>
+            <a class="secondary-button" id="empty-login-link" href="https://accounts.booth.pm/library" target="_blank" rel="noreferrer">BOOTH 로그인 열기</a>
+          </div>
+        </section>
+
+        <div class="load-more-wrap" id="load-more-wrap" hidden>
+          <button class="secondary-button" id="load-more" type="button">더 보기</button>
+        </div>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <dialog class="modal" id="folder-dialog">
+      <form method="dialog" id="folder-form">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">폴더 정리</p>
+            <h2 id="folder-dialog-title">새 폴더</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="folder-dialog" aria-label="닫기">×</button>
+        </div>
+
+        <label class="form-field" id="folder-name-field">
+          <span>폴더 이름</span>
+          <input id="folder-name-input" type="text" maxlength="40" autocomplete="off" required>
+        </label>
+
+        <label class="form-field" id="folder-parent-field">
+          <span>이동할 위치</span>
+          <select id="folder-parent-select"></select>
+          <small>폴더는 최대 3계층까지 만들 수 있어요.</small>
+        </label>
+
+        <p class="form-error" id="folder-form-error" role="alert"></p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-close-dialog="folder-dialog">취소</button>
+          <button class="primary-button" id="folder-submit" type="submit">저장</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal compact-modal" id="assign-dialog">
+      <form method="dialog" id="assign-form">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">상품 분류</p>
+            <h2>폴더 선택</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="assign-dialog" aria-label="닫기">×</button>
+        </div>
+        <p class="modal-product-name" id="assign-item-name"></p>
+        <label class="form-field">
+          <span>보관할 폴더</span>
+          <select id="assign-folder-select"></select>
+        </label>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-close-dialog="assign-dialog">취소</button>
+          <button class="primary-button" type="submit">적용</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal compact-modal" id="confirm-dialog">
+      <form method="dialog" id="confirm-form">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">폴더 삭제</p>
+            <h2>이 폴더를 삭제할까요?</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="confirm-dialog" aria-label="닫기">×</button>
+        </div>
+        <p class="confirm-copy" id="confirm-copy"></p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-close-dialog="confirm-dialog">취소</button>
+          <button class="danger-button" type="submit">폴더 삭제</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal compact-modal" id="data-delete-dialog">
+      <form method="dialog" id="data-delete-form">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">개인정보 보호</p>
+            <h2>저장 데이터를 모두 삭제할까요?</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="data-delete-dialog" aria-label="닫기">×</button>
+        </div>
+        <p class="confirm-copy">상품 목록, 즐겨찾기, 폴더와 분류 정보, 테마 설정과 빨간약 결제 합계 캐시가 이 기기에서 즉시 삭제되고 BOOTH 계정 페이지 읽기 권한도 해제됩니다. BOOTH 계정과 구매 내역에는 영향을 주지 않으며, 삭제한 정리 정보는 복구할 수 없습니다.</p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-close-dialog="data-delete-dialog">취소</button>
+          <button class="danger-button" type="submit">모든 로컬 데이터 삭제</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal red-pill-modal" id="red-pill-dialog">
+      <div class="red-pill-dialog-content">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow red-pill-eyebrow">FUN STAT</p>
+            <h2>BOOTH 빨간약</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="red-pill-dialog" aria-label="닫기">×</button>
+        </div>
+
+        <div class="red-pill-intro" id="red-pill-intro">
+          <div class="red-pill-mark" aria-hidden="true">!</div>
+          <strong>내 취향에 얼마를 썼을까요?</strong>
+          <p>완료된 BOOTH 주문의 실제 결제 금액을 모두 더해 봅니다.</p>
+        </div>
+
+        <div class="red-pill-progress" id="red-pill-progress" aria-live="polite" hidden>
+          <div class="red-pill-progress-copy">
+            <strong id="red-pill-progress-message">구매 내역을 확인하고 있어요</strong>
+            <span id="red-pill-progress-detail">잠시만 기다려 주세요.</span>
+          </div>
+          <div class="red-pill-progress-track" aria-hidden="true">
+            <div class="red-pill-progress-value" id="red-pill-progress-value"></div>
+          </div>
+        </div>
+
+        <div class="red-pill-result" id="red-pill-result" hidden>
+          <p class="red-pill-total-label">지금까지 확인된 총 결제 금액</p>
+          <strong class="red-pill-total" id="red-pill-total">0엔</strong>
+          <p class="red-pill-other-currencies" id="red-pill-other-currencies" hidden></p>
+          <div class="red-pill-stats">
+            <div>
+              <span>완료 주문</span>
+              <strong id="red-pill-order-count">0건</strong>
+            </div>
+            <div>
+              <span>주문당 평균</span>
+              <strong id="red-pill-average">0엔</strong>
+            </div>
+            <div>
+              <span>무료 주문</span>
+              <strong id="red-pill-free-count">0건</strong>
+            </div>
+          </div>
+          <p class="red-pill-verdict" id="red-pill-verdict"></p>
+          <p class="red-pill-calculated-at" id="red-pill-calculated-at"></p>
+        </div>
+
+        <p class="red-pill-error" id="red-pill-error" role="alert" hidden></p>
+        <p class="red-pill-disclaimer">재미용 통계입니다. 완료된 주문의 ‘결제 금액’을 합산하므로 상품값 외에 BOOST나 배송비 등이 포함될 수 있으며, 기프트로 받은 상품은 포함하지 않습니다.</p>
+
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-close-dialog="red-pill-dialog">닫기</button>
+          <button class="red-pill-calculate" id="red-pill-calculate" type="button">계산 시작</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>
