@@ -47,11 +47,13 @@
             <button class="mini-button" id="add-root-folder" type="button" aria-label="최상위 폴더 추가">＋</button>
           </div>
 
+          <p class="folder-drop-hint" id="folder-drop-hint" aria-live="polite">카드를 폴더에 끌어 놓아 분류</p>
+
           <button class="folder-row folder-system-row is-active" id="all-folders" type="button">
             <span class="folder-glyph" aria-hidden="true">▰</span>
             <span class="folder-name">모든 폴더</span>
           </button>
-          <button class="folder-row folder-system-row" id="unfiled-folder" type="button">
+          <button class="folder-row folder-system-row" id="unfiled-folder" type="button" data-drop-folder-id="" title="상품 카드를 끌어 놓아 미분류로 이동">
             <span class="folder-glyph" aria-hidden="true">□</span>
             <span class="folder-name">미분류</span>
             <span class="folder-count" id="unfiled-count">0</span>

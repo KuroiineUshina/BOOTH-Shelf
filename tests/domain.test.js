@@ -11,6 +11,7 @@ import {
   getDescendantIds,
   moveFolder,
   renameFolder,
+  setItemFolderAssignment,
   sortItems,
 } from "../src/domain.js";
 
@@ -65,6 +66,30 @@ test("폴더 삭제 시 하위 폴더와 상품 배치를 한 단계 위로 보�
   assert.equal(result.folders.find((folder) => folder.id === "grandchild").parentId, "root");
   assert.equal(result.assignments["purchased:1"], "root");
   assert.equal(result.assignments["gift:2"], "grandchild");
+});
+
+test("상품을 폴더에 넣거나 미분류로 옮길 때 기존 배치를 변경하지 않는다", () => {
+  const items = [{ key: "purchased:1" }, { key: "gift:2" }];
+  const assignments = { "purchased:1": "root" };
+
+  const moved = setItemFolderAssignment(items, folders, assignments, "purchased:1", "tools");
+  assert.deepEqual(moved, { "purchased:1": "tools" });
+  assert.deepEqual(assignments, { "purchased:1": "root" });
+
+  const unfiled = setItemFolderAssignment(items, folders, moved, "purchased:1", null);
+  assert.deepEqual(unfiled, {});
+});
+
+test("존재하지 않는 상품이나 폴더로의 배치를 차단한다", () => {
+  const items = [{ key: "purchased:1" }];
+  assert.throws(
+    () => setItemFolderAssignment(items, folders, {}, "missing", "root"),
+    /상품을 찾을 수 없어요/,
+  );
+  assert.throws(
+    () => setItemFolderAssignment(items, folders, {}, "purchased:1", "missing"),
+    /폴더를 찾을 수 없어요/,
+  );
 });
 
 test("상품명·판매자·출처·즐겨찾기·폴더 필터를 조합한다", () => {

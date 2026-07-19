@@ -9,6 +9,7 @@ import {
   getFolderPath,
   moveFolder,
   renameFolder,
+  setItemFolderAssignment,
   sortItems,
 } from "./domain.js";
 import {
@@ -38,6 +39,9 @@ const STATE_LOCK_NAME = "booth-shelf-state-write";
 const SPENDING_LOCK_NAME = "booth-shelf-spending-scan";
 const BOOTH_HOST_PERMISSION = "https://accounts.booth.pm/*";
 const CARD_FLIP_FOCUS_DELAY_MS = 360;
+const ITEM_DRAG_MIME = "application/x-booth-shelf-item";
+const DRAG_CLICK_SUPPRESSION_MS = 320;
+const DROP_SUCCESS_DURATION_MS = 760;
 
 const ui = {
   source: "all",
@@ -50,6 +54,7 @@ const ui = {
   selectedFolderId: null,
   folderDialogMode: null,
   assigningItemKey: null,
+  dropSuccessFolderId: null,
   syncing: false,
   calculatingSpending: false,
 };
@@ -58,15 +63,23 @@ let state;
 let preferences;
 let spendingSummary;
 let renderTimer;
+let dropSuccessTimer;
 let fallbackSaveQueue = Promise.resolve();
 const downloadCardStates = new Map();
+const itemDrag = {
+  itemKey: null,
+  target: null,
+  blockedByControl: false,
+  openedSidebar: false,
+  suppressClickUntil: 0,
+};
 
 const refs = Object.fromEntries(
   [
     "sidebar", "sidebar-close", "sidebar-open", "sidebar-backdrop",
     "all-count", "purchased-count", "gift-count", "favorites-count",
     "favorites-nav", "add-root-folder", "all-folders", "unfiled-folder",
-    "unfiled-count", "folder-tree", "folder-actions", "add-child-folder",
+    "unfiled-count", "folder-drop-hint", "folder-tree", "folder-actions", "add-child-folder",
     "rename-folder", "move-folder", "delete-folder", "search-input",
     "search-field", "sync-button", "view-eyebrow", "view-title",
     "view-description", "last-sync", "sort-select", "sync-panel",
@@ -490,6 +503,7 @@ function renderNavigation() {
   refs["favorites-nav"].classList.toggle("is-active", ui.favoritesOnly);
   refs["all-folders"].classList.toggle("is-active", ui.folderId === "all");
   refs["unfiled-folder"].classList.toggle("is-active", ui.folderId === "unfiled");
+  refs["unfiled-folder"].classList.toggle("is-drop-success", ui.dropSuccessFolderId === "unfiled");
 }
 
 function directFolderCount(folderId) {
@@ -502,12 +516,14 @@ function renderFolderBranch(branch, depth = 1) {
   for (const folder of branch) {
     const wrapper = element("div", { className: "folder-branch" });
     const row = element("button", {
-      className: `folder-row${ui.folderId === folder.id ? " is-active" : ""}${ui.selectedFolderId === folder.id ? " is-selected" : ""}`,
+      className: `folder-row${ui.folderId === folder.id ? " is-active" : ""}${ui.selectedFolderId === folder.id ? " is-selected" : ""}${ui.dropSuccessFolderId === folder.id ? " is-drop-success" : ""}`,
       attrs: {
         type: "button",
         role: "treeitem",
         "aria-level": depth,
         "data-folder-id": folder.id,
+        "data-drop-folder-id": folder.id,
+        title: `${folder.name} 폴더 · 상품 카드를 끌어 놓아 분류`,
       },
     });
     row.style.setProperty("--folder-depth", String(depth - 1));
@@ -674,7 +690,12 @@ function createCard(item, index) {
   const downloadState = getDownloadCardState(item.key);
   const card = element("article", {
     className: `item-card${downloadState.flipped ? " is-flipped" : ""}`,
-    attrs: { "data-item-key": item.key },
+    attrs: {
+      "data-item-key": item.key,
+      draggable: downloadState.flipped ? "false" : "true",
+      "aria-grabbed": "false",
+      title: downloadState.flipped ? null : "폴더로 끌어 놓아 정리",
+    },
   });
   card.style.setProperty("--card-index", String(Math.min(index, 12)));
 
@@ -693,6 +714,7 @@ function createCard(item, index) {
         alt: "",
         loading: "lazy",
         decoding: "async",
+        draggable: "false",
       },
     }));
   } else {
@@ -716,6 +738,7 @@ function createCard(item, index) {
         href: item.productUrl,
         target: "_blank",
         rel: "noopener noreferrer",
+        draggable: "false",
         "aria-label": `${item.title} 상품 상세 페이지 열기`,
       },
     })
@@ -781,6 +804,145 @@ function findRenderedCard(itemKey) {
     .find((card) => card.dataset.itemKey === itemKey) ?? null;
 }
 
+function clearFolderDropSuccess() {
+  window.clearTimeout(dropSuccessTimer);
+  ui.dropSuccessFolderId = null;
+  refs["unfiled-folder"].classList.remove("is-drop-success");
+  refs["folder-tree"].querySelectorAll(".is-drop-success").forEach((row) => {
+    row.classList.remove("is-drop-success");
+  });
+}
+
+function markFolderDropSuccess(folderId) {
+  clearFolderDropSuccess();
+  ui.dropSuccessFolderId = folderId || "unfiled";
+  dropSuccessTimer = window.setTimeout(clearFolderDropSuccess, DROP_SUCCESS_DURATION_MS);
+}
+
+function isInteractiveDragOrigin(target) {
+  return target instanceof Element
+    && Boolean(target.closest("a, button, input, select, textarea, [contenteditable='true']"));
+}
+
+function createItemDragPreview(item) {
+  const preview = element("div", { className: "item-drag-preview" });
+  const copy = element("span", { className: "item-drag-preview-copy" });
+  copy.append(
+    element("strong", { text: item.title }),
+    element("small", { text: "폴더로 이동" }),
+  );
+  preview.append(
+    element("span", { className: "item-drag-preview-icon", text: "▰", attrs: { "aria-hidden": "true" } }),
+    copy,
+  );
+  document.body.append(preview);
+  return preview;
+}
+
+function setFolderDropTarget(target) {
+  if (itemDrag.target === target) return;
+  itemDrag.target?.classList.remove("is-drop-target");
+  itemDrag.target = target;
+  itemDrag.target?.classList.add("is-drop-target");
+}
+
+function getFolderDropTarget(target) {
+  if (!(target instanceof Element)) return null;
+  const row = target.closest(".folder-row[data-drop-folder-id]");
+  if (!row || !refs.sidebar.contains(row)) return null;
+  const folderId = row.dataset.dropFolderId || null;
+  if (folderId && !state.folders.some((folder) => folder.id === folderId)) return null;
+  return row;
+}
+
+function finishItemDrag({ dropped = false } = {}) {
+  const draggedItemKey = itemDrag.itemKey;
+  const shouldCloseSidebar = itemDrag.openedSidebar;
+  if (draggedItemKey) {
+    const card = findRenderedCard(draggedItemKey);
+    card?.classList.remove("is-dragging");
+    card?.setAttribute("aria-grabbed", "false");
+    itemDrag.suppressClickUntil = Date.now() + DRAG_CLICK_SUPPRESSION_MS;
+  }
+  setFolderDropTarget(null);
+  document.body.classList.remove("is-item-dragging");
+  refs["folder-drop-hint"].textContent = "카드를 폴더에 끌어 놓아 분류";
+  itemDrag.itemKey = null;
+  itemDrag.blockedByControl = false;
+  itemDrag.openedSidebar = false;
+  if (shouldCloseSidebar) {
+    window.setTimeout(closeSidebar, dropped ? 460 : 0);
+  }
+}
+
+function startItemDrag(event) {
+  const card = event.target instanceof Element
+    ? event.target.closest(".item-card[data-item-key]")
+    : null;
+  if (!card || itemDrag.blockedByControl || card.classList.contains("is-flipped") || !event.dataTransfer) {
+    event.preventDefault();
+    return;
+  }
+
+  const item = findItem(card.dataset.itemKey);
+  if (!item) {
+    event.preventDefault();
+    return;
+  }
+
+  clearFolderDropSuccess();
+  itemDrag.itemKey = item.key;
+  itemDrag.openedSidebar = false;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData(ITEM_DRAG_MIME, item.key);
+  event.dataTransfer.setData("text/plain", item.title);
+
+  const preview = createItemDragPreview(item);
+  event.dataTransfer.setDragImage(preview, 22, 22);
+  window.setTimeout(() => preview.remove(), 0);
+
+  card.classList.add("is-dragging");
+  card.setAttribute("aria-grabbed", "true");
+  document.body.classList.add("is-item-dragging");
+  refs["folder-drop-hint"].textContent = "놓을 폴더를 선택하세요";
+
+  if (window.matchMedia("(max-width: 980px)").matches
+    && !document.body.classList.contains("sidebar-visible")) {
+    itemDrag.openedSidebar = true;
+    openSidebar();
+  }
+}
+
+function handleFolderDragOver(event) {
+  if (!itemDrag.itemKey) return;
+  const target = getFolderDropTarget(event.target);
+  if (!target) {
+    setFolderDropTarget(null);
+    return;
+  }
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  setFolderDropTarget(target);
+}
+
+async function handleFolderDrop(event) {
+  const target = getFolderDropTarget(event.target);
+  const transferredItemKey = event.dataTransfer?.getData(ITEM_DRAG_MIME);
+  const itemKey = itemDrag.itemKey || transferredItemKey;
+  if (!target || !itemKey) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  const folderId = target.dataset.dropFolderId || null;
+  finishItemDrag({ dropped: true });
+
+  try {
+    await updateItemFolderAssignment(itemKey, folderId, { fromDrop: true });
+  } catch (error) {
+    showToast(`상품을 옮기지 못했어요: ${error.message}`, "error");
+  }
+}
+
 function updateRenderedDownloadBack(itemKey) {
   const item = findItem(itemKey);
   const card = findRenderedCard(itemKey);
@@ -794,6 +956,7 @@ function setCardFlipped(card, flipped, { moveFocus = false } = {}) {
   const front = card.querySelector(".item-card-front");
   const back = card.querySelector(".item-card-back");
   card.classList.toggle("is-flipped", flipped);
+  card.draggable = !flipped;
   front?.setAttribute("aria-hidden", String(flipped));
   back?.setAttribute("aria-hidden", String(!flipped));
   if (front) front.inert = flipped;
@@ -1264,15 +1427,49 @@ function openAssignDialog(itemKey) {
   refs["assign-dialog"].showModal();
 }
 
+async function updateItemFolderAssignment(itemKey, folderId, { fromDrop = false } = {}) {
+  const item = findItem(itemKey);
+  if (!item) throw new Error("상품을 찾을 수 없어요.");
+
+  const normalizedFolderId = folderId || null;
+  const previousFolderId = state.assignments[itemKey] || null;
+  const folderPath = normalizedFolderId ? getFolderPath(state.folders, normalizedFolderId) : [];
+  const folderLabel = normalizedFolderId
+    ? folderPath.map((folder) => folder.name).join(" / ")
+    : "미분류";
+
+  if (previousFolderId === normalizedFolderId) {
+    if (fromDrop) markFolderDropSuccess(normalizedFolderId);
+    render();
+    showToast(`이미 ${folderLabel}에 들어 있어요.`);
+    return false;
+  }
+
+  state.assignments = setItemFolderAssignment(
+    state.items,
+    state.folders,
+    state.assignments,
+    itemKey,
+    normalizedFolderId,
+  );
+  await persistState();
+  if (fromDrop) markFolderDropSuccess(normalizedFolderId);
+  render();
+  showToast(normalizedFolderId
+    ? `${folderLabel} 폴더로 옮겼어요.`
+    : "상품을 미분류로 옮겼어요.");
+  return true;
+}
+
 async function submitAssignment(event) {
   event.preventDefault();
   const folderId = refs["assign-folder-select"].value;
-  if (folderId) state.assignments[ui.assigningItemKey] = folderId;
-  else delete state.assignments[ui.assigningItemKey];
-  await persistState();
-  refs["assign-dialog"].close();
-  render();
-  showToast(folderId ? "상품을 폴더에 넣었어요." : "상품을 미분류로 옮겼어요.");
+  try {
+    await updateItemFolderAssignment(ui.assigningItemKey, folderId);
+    refs["assign-dialog"].close();
+  } catch (error) {
+    showToast(`상품을 옮기지 못했어요: ${error.message}`, "error");
+  }
 }
 
 function openDeleteConfirmation() {
@@ -1339,6 +1536,22 @@ function bindEvents() {
     if (button) selectFolder(button.dataset.folderId);
   });
 
+  refs["item-grid"].addEventListener("pointerdown", (event) => {
+    itemDrag.blockedByControl = isInteractiveDragOrigin(event.target);
+  });
+  refs["item-grid"].addEventListener("pointerup", () => {
+    if (!itemDrag.itemKey) itemDrag.blockedByControl = false;
+  });
+  refs["item-grid"].addEventListener("pointercancel", () => {
+    if (!itemDrag.itemKey) itemDrag.blockedByControl = false;
+  });
+  refs["item-grid"].addEventListener("dragstart", startItemDrag);
+  refs["item-grid"].addEventListener("dragend", () => finishItemDrag());
+  refs.sidebar.addEventListener("dragover", handleFolderDragOver);
+  refs.sidebar.addEventListener("drop", (event) => {
+    void handleFolderDrop(event);
+  });
+
   refs["add-root-folder"].addEventListener("click", () => openFolderDialog("add-root"));
   refs["add-child-folder"].addEventListener("click", () => openFolderDialog("add-child"));
   refs["rename-folder"].addEventListener("click", () => openFolderDialog("rename"));
@@ -1371,6 +1584,11 @@ function bindEvents() {
   });
 
   refs["item-grid"].addEventListener("click", (event) => {
+    if (Date.now() < itemDrag.suppressClickUntil) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     const downloadOption = event.target.closest("[data-download-option-index]");
     if (downloadOption) {
       startDownload(downloadOption);

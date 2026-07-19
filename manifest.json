@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BOOTH Shelf",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "version_name": "정식 서비스 1.0",
   "description": "내 BOOTH 라이브러리와 기프트함을 한곳에서 검색하고 폴더로 정리합니다.",
   "icons": {

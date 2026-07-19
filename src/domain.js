@@ -66,6 +66,22 @@ export function sortItems(items, sort = "purchase") {
   });
 }
 
+export function setItemFolderAssignment(items, folders, assignments, itemKey, folderId) {
+  const item = items.find((candidate) => candidate.key === itemKey);
+  if (!item) throw new Error("상품을 찾을 수 없어요.");
+
+  const normalizedFolderId = folderId || null;
+  if (normalizedFolderId && !folders.some((folder) => folder.id === normalizedFolderId)) {
+    throw new Error("폴더를 찾을 수 없어요.");
+  }
+
+  const nextAssignments = Object.fromEntries(
+    Object.entries(assignments ?? {}).filter(([assignedItemKey]) => assignedItemKey !== itemKey),
+  );
+  if (normalizedFolderId) nextAssignments[itemKey] = normalizedFolderId;
+  return nextAssignments;
+}
+
 export function folderDepth(folders, folderId) {
   if (!folderId) return 0;
 
