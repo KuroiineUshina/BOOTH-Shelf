@@ -1,8 +1,15 @@
 # BOOTH Shelf
 
+> [!IMPORTANT]
+> ## 📢 BOOTH Shelf 공식 Chrome 웹 스토어 배포
+>
+> ### [▶ Chrome 웹 스토어에서 바로 설치하기](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb)
+>
+> **이제 Chrome 웹 스토어에서 간편하게 설치하고 자동 업데이트할 수 있습니다.** 링크를 열고 **Chrome에 추가**를 눌러 주세요.
+
 BOOTH의 내 라이브러리와 받은 기프트를 한 화면에서 검색하고, 즐겨찾기와 3계층 폴더로 정리하는 Chromium 기반 확장프로그램입니다.
 
-현재 정식 서비스 버전은 **1.0**입니다. Manifest의 `version`은 브라우저 업데이트 순서를 위한 기술 버전이며, 사용자에게 표시되는 `version_name`은 실제 서비스 릴리스 단위에서만 변경합니다.
+현재 정식 서비스 버전은 **1.0.1**입니다. Manifest의 `version`은 브라우저 업데이트 순서를 위한 기술 버전이며, 사용자에게 표시되는 `version_name`은 실제 서비스 릴리스 단위에서만 변경합니다.
 
 ## 주요 기능
 
@@ -10,6 +17,7 @@ BOOTH의 내 라이브러리와 받은 기프트를 한 화면에서 검색하�
 - 상품명 또는 판매자명 검색
 - 구매순, 이름 오름차순, 이름 내림차순 정렬
 - 구매 상품과 받은 기프트 필터
+- 같은 상품 페이지에서 보유한 여러 아바타 버전과 구매·기프트 항목을 카드 하나로 통합
 - 즐겨찾기
 - 최대 3계층 폴더 생성, 이름 변경, 부모 폴더 이동, 삭제
 - 상품 카드를 사이드바 폴더로 끌어 놓는 드래그 앤 드롭 분류
@@ -25,6 +33,17 @@ BOOTH의 내 라이브러리와 받은 기프트를 한 화면에서 검색하�
 - `prefers-reduced-motion` 접근성 설정 지원
 
 ## 설치
+
+### Chrome 웹 스토어 설치 — 권장
+
+1. [BOOTH Shelf Chrome 웹 스토어 페이지](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb)를 엽니다.
+2. **Chrome에 추가**를 눌러 설치합니다.
+3. 같은 브라우저 프로필로 [BOOTH 라이브러리](https://accounts.booth.pm/library)에 로그인합니다.
+4. 도구 모음에서 **BOOTH Shelf**를 누르고 **전체 동기화**를 실행합니다.
+
+웹 스토어 설치본은 새 버전이 승인·배포되면 브라우저가 자동으로 업데이트합니다.
+
+### GitHub Release 수동 설치
 
 1. [최신 GitHub Release](https://github.com/KuroiineUshina/BOOTH-Shelf/releases/latest)에서 `booth-shelf-vX.Y.Z.zip` 파일을 받습니다. GitHub가 자동으로 제공하는 **Source code** 파일이 아니라 이름이 `booth-shelf-`로 시작하는 설치 파일을 선택하세요.
 2. ZIP을 계속 보관할 로컬 폴더에 압축 해제합니다.

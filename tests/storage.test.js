@@ -43,7 +43,12 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
         sourcePageUrl: "https://phishing.example/library?page=2",
         extra: "discard me",
       }),
-      validItem({ key: "tampered", title: "중복 상품" }),
+      validItem({
+        key: "tampered",
+        title: "중복 상품",
+        productUrl: "javascript:alert(2)",
+        imageUrl: "https://tracker.example/i/101/pixel-2.gif",
+      }),
       validItem({ productId: "not-a-number", key: "purchased:not-a-number" }),
     ],
     folders: [
@@ -61,7 +66,7 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
     lastSyncedAt: "not-a-date",
   });
 
-  assert.equal(sanitized.schemaVersion, 1);
+  assert.equal(sanitized.schemaVersion, 2);
   assert.equal("injected" in sanitized, false);
   assert.equal(sanitized.items.length, 1);
   assert.equal(sanitized.items[0].title, "안전한 상품");
@@ -69,11 +74,52 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
   assert.equal(sanitized.items[0].imageUrl, "");
   assert.equal(sanitized.items[0].sourcePageUrl, "https://accounts.booth.pm/library?page=2");
   assert.equal("extra" in sanitized.items[0], false);
-  assert.deepEqual(sanitized.favorites, ["purchased:101"]);
-  assert.deepEqual(sanitized.assignments, { "purchased:101": "child" });
+  assert.equal(sanitized.items[0].key, "product:101");
+  assert.deepEqual(sanitized.items[0].sources, ["purchased"]);
+  assert.deepEqual(sanitized.favorites, ["product:101"]);
+  assert.deepEqual(sanitized.assignments, { "product:101": "child" });
   assert.equal(sanitized.folders.some((folder) => folder.id === "__proto__"), false);
   assert.equal(sanitized.folders.find((folder) => folder.id === "too-deep").parentId, null);
   assert.equal(sanitized.lastSyncedAt, null);
+});
+
+test("이전 버전의 같은 구매·기프트 상품과 정리 상태를 한 카드로 마이그레이션한다", () => {
+  const sanitized = sanitizeState({
+    schemaVersion: 1,
+    items: [
+      validItem(),
+      validItem({
+        key: "gift:101",
+        source: "gift",
+        sourcePageUrl: "https://accounts.booth.pm/library/gifts?page=7",
+        page: 7,
+        orderOnPage: 2,
+        globalOrder: 22,
+      }),
+    ],
+    folders: [
+      { id: "purchase-folder", name: "구매", parentId: null, order: 0 },
+      { id: "gift-folder", name: "선물", parentId: null, order: 1 },
+    ],
+    favorites: ["gift:101"],
+    assignments: {
+      "gift:101": "gift-folder",
+      "purchased:101": "purchase-folder",
+    },
+  });
+
+  assert.equal(sanitized.items.length, 1);
+  assert.equal(sanitized.items[0].key, "product:101");
+  assert.deepEqual(sanitized.items[0].sources, ["purchased", "gift"]);
+  assert.deepEqual(
+    sanitized.items[0].locations.map(({ source, page }) => ({ source, page })),
+    [
+      { source: "purchased", page: 2 },
+      { source: "gift", page: 7 },
+    ],
+  );
+  assert.deepEqual(sanitized.favorites, ["product:101"]);
+  assert.deepEqual(sanitized.assignments, { "product:101": "purchase-folder" });
 });
 
 test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", async () => {

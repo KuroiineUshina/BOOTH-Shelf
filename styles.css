@@ -1169,6 +1169,11 @@ body.is-item-dragging .item-card.is-dragging .item-card-face {
   color: var(--gift);
 }
 
+.source-badge.source-mixed {
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.94) 0 47%, rgba(240, 237, 255, 0.94) 53% 100%);
+  color: #6553a5;
+}
+
 .item-content {
   display: flex;
   min-height: 156px;
@@ -2140,6 +2145,10 @@ body { font-size: 16px; }
 }
 :root[data-theme="dark"] .source-badge.source-gift {
   background: rgba(41, 36, 66, 0.94);
+}
+:root[data-theme="dark"] .source-badge.source-mixed {
+  background: linear-gradient(100deg, rgba(31, 33, 36, 0.94) 0 47%, rgba(41, 36, 66, 0.94) 53% 100%);
+  color: #c9bff8;
 }
 :root[data-theme="dark"] .item-card:hover .item-card-face {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03), 0 18px 46px rgba(0, 0, 0, 0.34);

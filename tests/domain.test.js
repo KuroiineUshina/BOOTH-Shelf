@@ -9,6 +9,7 @@ import {
   filterItems,
   folderDepth,
   getDescendantIds,
+  itemHasSource,
   moveFolder,
   renameFolder,
   setItemFolderAssignment,
@@ -97,13 +98,16 @@ test("상품명·판매자·출처·즐겨찾기·폴더 필터를 조합한다"
     { key: "purchased:1", title: "Moon Dress", sellerName: "Lumen", source: "purchased" },
     { key: "gift:2", title: "Garden Prop", sellerName: "Tiny Orbit", source: "gift" },
     { key: "purchased:3", title: "Garden Hair", sellerName: "Lumen", source: "purchased" },
+    { key: "product:4", title: "Twin Avatar Set", sellerName: "Orbit", source: "purchased", sources: ["purchased", "gift"] },
   ];
 
   assert.deepEqual(filterItems(items, { query: "garden" }).map((item) => item.key), ["gift:2", "purchased:3"]);
   assert.deepEqual(filterItems(items, { query: "lumen", searchField: "seller" }).map((item) => item.key), ["purchased:1", "purchased:3"]);
-  assert.deepEqual(filterItems(items, { source: "gift" }).map((item) => item.key), ["gift:2"]);
+  assert.deepEqual(filterItems(items, { source: "gift" }).map((item) => item.key), ["gift:2", "product:4"]);
+  assert.deepEqual(filterItems(items, { source: "purchased" }).map((item) => item.key), ["purchased:1", "purchased:3", "product:4"]);
+  assert.equal(itemHasSource(items[3], "gift"), true);
   assert.deepEqual(filterItems(items, { favoritesOnly: true, favorites: ["purchased:3"] }).map((item) => item.key), ["purchased:3"]);
-  assert.deepEqual(filterItems(items, { folderId: "unfiled", assignments: { "gift:2": "world" } }).map((item) => item.key), ["purchased:1", "purchased:3"]);
+  assert.deepEqual(filterItems(items, { folderId: "unfiled", assignments: { "gift:2": "world" } }).map((item) => item.key), ["purchased:1", "purchased:3", "product:4"]);
 });
 
 test("구매순과 이름 오름·내림차순을 정렬한다", () => {

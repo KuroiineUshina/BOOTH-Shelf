@@ -47,6 +47,20 @@ const fixture = `
             <a href="https://maker-two.booth.pm/">Maker Two</a>
           </div>
         </div>
+        <div class="card">
+          <div class="card-header">
+            <a href="https://booth.pm/ko/items/101">
+              <img src="https://booth.pximg.net/c/300x300/i/101/image.jpg" alt="">
+            </a>
+            <a href="https://booth.pm/ko/items/101">첫 번째 상품의 다른 아바타 버전</a>
+          </div>
+          <div class="downloads">
+            <div class="download-row">
+              <span>avatar_b_package.zip (18 MB)</span>
+              <a href="https://booth.pm/downloadables/7004">Download</a>
+            </div>
+          </div>
+        </div>
         <nav>
           <a href="/library?page=1">1</a>
           <a href="/library?page=9">9</a>
@@ -113,10 +127,11 @@ try {
       && result.items[1].productId === "202"
       && result.items[1].productUrl === "https://booth.pm/ja/items/202"
       && downloads.found
-      && downloads.options.length === 2
+      && downloads.options.length === 3
       && downloads.options[0].label === "avatar_package_v2.zip"
       && downloads.options[0].detail === "42 MB"
       && downloads.options[1].url === "https://booth.pm/downloadables/7002"
+      && downloads.options[2].url === "https://booth.pm/downloadables/7004"
       && orders.pageCount === 4
       && orders.orderIds.length === 2
       && orderDetail.completed

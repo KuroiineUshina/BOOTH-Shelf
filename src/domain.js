@@ -12,6 +12,14 @@ export function normalizeText(value) {
     .trim();
 }
 
+export function itemHasSource(item, source) {
+  if (!item || !["purchased", "gift"].includes(source)) return false;
+  const sources = Array.isArray(item.sources) && item.sources.length
+    ? item.sources
+    : [item.source];
+  return sources.includes(source);
+}
+
 export function filterItems(items, filters = {}) {
   const {
     query = "",
@@ -27,7 +35,7 @@ export function filterItems(items, filters = {}) {
   const favoriteSet = favorites instanceof Set ? favorites : new Set(favorites);
 
   return items.filter((item) => {
-    if (source !== "all" && item.source !== source) return false;
+    if (source !== "all" && !itemHasSource(item, source)) return false;
     if (favoritesOnly && !favoriteSet.has(item.key)) return false;
 
     const assignedFolderId = assignments[item.key] ?? null;
