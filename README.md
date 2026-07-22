@@ -1,8 +1,11 @@
 # BOOTH Shelf
 
-## [Chrome 웹 스토어에서 BOOTH Shelf 바로 설치하기](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb)
-
-**이제 BOOTH Shelf를 Chrome 웹 스토어에서 간편하게 설치하고 자동 업데이트할 수 있습니다.** 위 링크를 열고 **Chrome에 추가**를 눌러 주세요.
+> [!IMPORTANT]
+> ## 📢 BOOTH Shelf 공식 Chrome 웹 스토어 배포
+>
+> ### [▶ Chrome 웹 스토어에서 바로 설치하기](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb)
+>
+> **이제 Chrome 웹 스토어에서 간편하게 설치하고 자동 업데이트할 수 있습니다.** 링크를 열고 **Chrome에 추가**를 눌러 주세요.
 
 BOOTH의 내 라이브러리와 받은 기프트를 한 화면에서 검색하고, 즐겨찾기와 3계층 폴더로 정리하는 Chromium 기반 확장프로그램입니다.
 
