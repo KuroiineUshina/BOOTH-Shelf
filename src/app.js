@@ -7,6 +7,7 @@ import {
   filterItems,
   folderDepth,
   getFolderPath,
+  itemHasSource,
   moveFolder,
   renameFolder,
   setItemFolderAssignment,
@@ -128,9 +129,10 @@ function demoState() {
   ];
 
   const items = samples.map(([title, sellerName, source], index) => ({
-    key: `${source}:demo-${index + 1}`,
+    key: `product:demo-${index + 1}`,
     productId: `demo-${index + 1}`,
     source,
+    sources: index === 0 ? ["purchased", "gift"] : [source],
     title,
     sellerName,
     sellerUrl: "",
@@ -142,10 +144,28 @@ function demoState() {
     page: 1,
     orderOnPage: index,
     globalOrder: index,
+    locations: [
+      {
+        source,
+        sourcePageUrl: source === "gift"
+          ? "https://accounts.booth.pm/library/gifts?page=1"
+          : "https://accounts.booth.pm/library?page=1",
+        page: 1,
+        orderOnPage: index,
+        globalOrder: index,
+      },
+      ...(index === 0 ? [{
+        source: "gift",
+        sourcePageUrl: "https://accounts.booth.pm/library/gifts?page=1",
+        page: 1,
+        orderOnPage: index,
+        globalOrder: index,
+      }] : []),
+    ],
   }));
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     items,
     folders,
     favorites: [items[0].key, items[4].key, items[8].key],
@@ -486,8 +506,8 @@ function getViewCopy() {
 }
 
 function renderNavigation() {
-  const purchasedCount = state.items.filter((item) => item.source === "purchased").length;
-  const giftCount = state.items.filter((item) => item.source === "gift").length;
+  const purchasedCount = state.items.filter((item) => itemHasSource(item, "purchased")).length;
+  const giftCount = state.items.filter((item) => itemHasSource(item, "gift")).length;
   const favoriteCount = state.favorites.filter((key) => state.items.some((item) => item.key === key)).length;
   const unfiledCount = state.items.filter((item) => !state.assignments[item.key]).length;
 
@@ -723,9 +743,12 @@ function createCard(item, index) {
     visual.append(element("span", { className: "placeholder-letter", text: initial, attrs: { "aria-hidden": "true" } }));
   }
 
+  const isPurchased = itemHasSource(item, "purchased");
+  const isGift = itemHasSource(item, "gift");
+  const sourceClass = isPurchased && isGift ? "mixed" : isGift ? "gift" : "purchased";
   visual.append(element("span", {
-    className: `source-badge source-${item.source}`,
-    text: item.source === "gift" ? "GIFT" : "BOUGHT",
+    className: `source-badge source-${sourceClass}`,
+    text: isPurchased && isGift ? "BOUGHT + GIFT" : isGift ? "GIFT" : "BOUGHT",
   }));
 
   const content = element("div", { className: "item-content" });

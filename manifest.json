@@ -1,11 +1,14 @@
 {
   "manifest_version": 3,
   "name": "BOOTH Shelf",
-  "version": "1.0.1",
-  "version_name": "정식 서비스 1.0",
+  "version": "1.0.2",
+  "version_name": "정식 서비스 1.0.1",
   "description": "내 BOOTH 라이브러리와 기프트함을 한곳에서 검색하고 폴더로 정리합니다.",
   "icons": {
-    "128": "assets/icon.png"
+    "16": "assets/icon16.png",
+    "32": "assets/icon32.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
   },
   "permissions": [
     "storage"
@@ -21,7 +24,7 @@
     "type": "module"
   },
   "action": {
-    "default_icon": "assets/icon.png",
+    "default_icon": "assets/icon128.png",
     "default_title": "BOOTH Shelf 열기"
   }
 }

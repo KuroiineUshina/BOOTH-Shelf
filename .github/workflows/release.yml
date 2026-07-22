@@ -31,19 +31,34 @@ jobs:
       - name: Verify tag matches project version
         run: npm run verify:version -- "$GITHUB_REF_NAME"
 
-      - name: Build installation ZIP
+      - name: Build installation and Chrome Web Store ZIPs
         shell: bash
         run: |
           set -euo pipefail
           package_dir="dist/booth-shelf"
           archive="dist/booth-shelf-${GITHUB_REF_NAME}.zip"
+          store_dir="dist/chrome-web-store"
+          store_archive="dist/booth-shelf-chrome-web-store-${GITHUB_REF_NAME}.zip"
           mkdir -p "$package_dir"
           cp manifest.json background.js dashboard.html styles.css LICENSE README.md PRIVACY.md "$package_dir/"
           cp -R assets src "$package_dir/"
+          mkdir -p "$store_dir/assets"
+          cp manifest.json background.js dashboard.html styles.css "$store_dir/"
+          cp -R src "$store_dir/"
+          cp assets/icon16.png assets/icon32.png assets/icon48.png assets/icon128.png "$store_dir/assets/"
           (
             cd dist
             zip -rq "$(basename "$archive")" booth-shelf
             sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256"
+          )
+          (
+            cd "$store_dir"
+            zip -rq "../$(basename "$store_archive")" \
+              manifest.json background.js dashboard.html styles.css assets src
+          )
+          (
+            cd dist
+            sha256sum "$(basename "$store_archive")" > "$(basename "$store_archive").sha256"
           )
 
       - name: Publish GitHub Release
@@ -53,6 +68,8 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "dist/booth-shelf-${GITHUB_REF_NAME}.zip" \
             "dist/booth-shelf-${GITHUB_REF_NAME}.zip.sha256" \
+            "dist/booth-shelf-chrome-web-store-${GITHUB_REF_NAME}.zip" \
+            "dist/booth-shelf-chrome-web-store-${GITHUB_REF_NAME}.zip.sha256" \
             --verify-tag \
             --generate-notes \
             --title "BOOTH Shelf ${GITHUB_REF_NAME}"

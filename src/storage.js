@@ -10,12 +10,14 @@ export const PREFERENCES_KEY = "boothShelfPreferences";
 export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
 
 const MAX_STORED_ITEMS = 50_000;
+const MAX_ITEM_LOCATIONS = 256;
 const MAX_STORED_FOLDERS = 2_000;
 const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const ITEM_SOURCES = Object.freeze(["purchased", "gift"]);
 
 export const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   items: [],
   folders: [],
   favorites: [],
@@ -91,31 +93,142 @@ function isSafeId(value) {
     && !BLOCKED_OBJECT_KEYS.has(value);
 }
 
+function isItemSource(value) {
+  return ITEM_SOURCES.includes(value);
+}
+
+function sourceOrder(source) {
+  const index = ITEM_SOURCES.indexOf(source);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function sanitizeLocation(value, fallback = {}) {
+  if (!isRecord(value)) return null;
+  const source = isItemSource(value.source)
+    ? value.source
+    : isItemSource(fallback.source) ? fallback.source : null;
+  if (!source) return null;
+
+  const fallbackPage = positiveInteger(value.page, positiveInteger(fallback.page));
+  const sourcePageUrl = sanitizeSourcePageUrl(
+    value.sourcePageUrl || fallback.sourcePageUrl,
+    source,
+    fallbackPage,
+  );
+  const resolvedPage = Number.parseInt(new URL(sourcePageUrl).searchParams.get("page") || "1", 10);
+  return {
+    source,
+    sourcePageUrl,
+    page: positiveInteger(resolvedPage, fallbackPage),
+    orderOnPage: nonNegativeInteger(value.orderOnPage, nonNegativeInteger(fallback.orderOnPage)),
+    globalOrder: nonNegativeInteger(value.globalOrder, nonNegativeInteger(fallback.globalOrder)),
+  };
+}
+
+function sortLocations(locations) {
+  return locations.sort((left, right) => (
+    sourceOrder(left.source) - sourceOrder(right.source)
+    || left.page - right.page
+    || left.orderOnPage - right.orderOnPage
+  ));
+}
+
+function mergeLocations(...locationLists) {
+  const merged = new Map();
+  for (const location of locationLists.flat()) {
+    if (!location) continue;
+    const key = `${location.source}:${location.page}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...location });
+    } else {
+      existing.orderOnPage = Math.min(existing.orderOnPage, location.orderOnPage);
+      existing.globalOrder = Math.min(existing.globalOrder, location.globalOrder);
+    }
+  }
+  return sortLocations([...merged.values()].slice(0, MAX_ITEM_LOCATIONS));
+}
+
+function withPrimaryLocation(item) {
+  const primary = item.locations[0];
+  return {
+    ...item,
+    source: primary?.source || item.sources[0],
+    sourcePageUrl: primary?.sourcePageUrl || "",
+    page: primary?.page || 1,
+    orderOnPage: primary?.orderOnPage || 0,
+  };
+}
+
 function sanitizeItem(value) {
   if (!isRecord(value)) return null;
 
-  const source = value.source === "gift" ? "gift" : value.source === "purchased" ? "purchased" : null;
   const productId = cleanString(value.productId, 64);
-  if (!source || !/^(?:\d+|demo-\d+)$/.test(productId)) return null;
+  if (!/^(?:\d+|demo-\d+)$/.test(productId)) return null;
 
   const title = cleanString(value.title, 500);
   if (!title) return null;
 
-  const page = positiveInteger(value.page);
-  return {
-    key: `${source}:${productId}`,
+  const legacySource = isItemSource(value.source) ? value.source : null;
+  const rawLocations = Array.isArray(value.locations)
+    ? value.locations.slice(0, MAX_ITEM_LOCATIONS)
+    : [];
+  const locations = rawLocations
+    .map((location) => sanitizeLocation(location))
+    .filter(Boolean);
+  if (legacySource) {
+    locations.push(sanitizeLocation(value, { source: legacySource }));
+  }
+
+  const sources = Array.from(new Set([
+    ...(Array.isArray(value.sources) ? value.sources.filter(isItemSource) : []),
+    ...locations.map((location) => location.source),
+    legacySource,
+  ].filter(Boolean))).sort((left, right) => sourceOrder(left) - sourceOrder(right));
+  if (!sources.length) return null;
+
+  const normalizedLocations = mergeLocations(locations);
+  if (!normalizedLocations.length) {
+    normalizedLocations.push(sanitizeLocation({}, {
+      source: sources[0],
+      sourcePageUrl: value.sourcePageUrl,
+      page: value.page,
+      orderOnPage: value.orderOnPage,
+      globalOrder: value.globalOrder,
+    }));
+  }
+
+  return withPrimaryLocation({
+    key: `product:${productId}`,
     productId,
-    source,
+    sources,
+    locations: normalizedLocations,
     title,
     sellerName: cleanString(value.sellerName, 300, "알 수 없는 판매자"),
     sellerUrl: sanitizeSellerUrl(value.sellerUrl),
     imageUrl: sanitizeImageUrl(value.imageUrl, productId),
     productUrl: sanitizeProductUrl(value.productUrl, productId),
-    sourcePageUrl: sanitizeSourcePageUrl(value.sourcePageUrl, source, page),
-    page,
-    orderOnPage: nonNegativeInteger(value.orderOnPage),
     globalOrder: nonNegativeInteger(value.globalOrder),
-  };
+  });
+}
+
+function mergeItems(existing, incoming) {
+  const sources = Array.from(new Set([...existing.sources, ...incoming.sources]))
+    .sort((left, right) => sourceOrder(left) - sourceOrder(right));
+  const locations = mergeLocations(existing.locations, incoming.locations);
+  const preferIncomingSeller = existing.sellerName === "알 수 없는 판매자"
+    && incoming.sellerName !== "알 수 없는 판매자";
+
+  return withPrimaryLocation({
+    ...existing,
+    sources,
+    locations,
+    sellerName: preferIncomingSeller ? incoming.sellerName : existing.sellerName,
+    sellerUrl: existing.sellerUrl || incoming.sellerUrl,
+    imageUrl: existing.imageUrl || incoming.imageUrl,
+    productUrl: existing.productUrl || incoming.productUrl,
+    globalOrder: Math.min(existing.globalOrder, incoming.globalOrder),
+  });
 }
 
 function sanitizeItems(value) {
@@ -124,9 +237,24 @@ function sanitizeItems(value) {
 
   for (const candidate of value.slice(0, MAX_STORED_ITEMS)) {
     const item = sanitizeItem(candidate);
-    if (item && !uniqueItems.has(item.key)) uniqueItems.set(item.key, item);
+    if (!item) continue;
+    const existing = uniqueItems.get(item.key);
+    uniqueItems.set(item.key, existing ? mergeItems(existing, item) : item);
   }
   return [...uniqueItems.values()];
+}
+
+function normalizeStoredItemKey(value) {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^(?:product|purchased|gift):((?:\d+|demo-\d+))$/);
+  return match ? `product:${match[1]}` : null;
+}
+
+function storedItemKeyPriority(value) {
+  if (value.startsWith("product:")) return 3;
+  if (value.startsWith("purchased:")) return 2;
+  if (value.startsWith("gift:")) return 1;
+  return 0;
 }
 
 function sanitizeFolders(value) {
@@ -184,17 +312,24 @@ export function sanitizeState(value) {
   const favorites = [];
   const seenFavorites = new Set();
   if (Array.isArray(state.favorites)) {
-    for (const key of state.favorites) {
-      if (typeof key !== "string" || !itemKeys.has(key) || seenFavorites.has(key)) continue;
+    for (const storedKey of state.favorites) {
+      const key = normalizeStoredItemKey(storedKey);
+      if (!key || !itemKeys.has(key) || seenFavorites.has(key)) continue;
       seenFavorites.add(key);
       favorites.push(key);
     }
   }
 
   const assignments = {};
+  const assignmentPriorities = new Map();
   if (isRecord(state.assignments)) {
-    for (const [key, folderId] of Object.entries(state.assignments)) {
-      if (itemKeys.has(key) && folderIds.has(folderId)) assignments[key] = folderId;
+    for (const [storedKey, folderId] of Object.entries(state.assignments)) {
+      const key = normalizeStoredItemKey(storedKey);
+      const priority = storedItemKeyPriority(storedKey);
+      if (!key || !itemKeys.has(key) || !folderIds.has(folderId)) continue;
+      if (priority <= (assignmentPriorities.get(key) || 0)) continue;
+      assignments[key] = folderId;
+      assignmentPriorities.set(key, priority);
     }
   }
 

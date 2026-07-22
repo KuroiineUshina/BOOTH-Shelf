@@ -32,6 +32,119 @@ export const SOURCES = Object.freeze([
   },
 ]);
 
+function sourceOrder(source) {
+  const index = SOURCES.findIndex((entry) => entry.id === source);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function itemLocation(item) {
+  if (!SOURCES.some((entry) => entry.id === item?.source)) return null;
+  const page = Number.isSafeInteger(item.page) && item.page > 0 ? item.page : 1;
+  return {
+    source: item.source,
+    sourcePageUrl: item.sourcePageUrl || buildSourcePageUrl(item.source, page),
+    page,
+    orderOnPage: Number.isSafeInteger(item.orderOnPage) && item.orderOnPage >= 0
+      ? item.orderOnPage
+      : 0,
+    globalOrder: Number.isSafeInteger(item.globalOrder) && item.globalOrder >= 0
+      ? item.globalOrder
+      : 0,
+  };
+}
+
+/**
+ * BOOTH can list the same product once per owned avatar variation and in both
+ * the purchase and gift libraries. Keep one UI item per product while retaining
+ * every page on which its downloadable variations can be found.
+ */
+export function groupBoothLibraryItems(items) {
+  const grouped = new Map();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const productId = String(item?.productId || "");
+    if (!/^\d+$/.test(productId)) continue;
+
+    const key = `product:${productId}`;
+    let group = grouped.get(key);
+    if (!group) {
+      group = {
+        ...item,
+        key,
+        productId,
+        sources: [],
+        locations: [],
+        globalOrder: Number.isSafeInteger(item.globalOrder) && item.globalOrder >= 0
+          ? item.globalOrder
+          : 0,
+      };
+      grouped.set(key, group);
+    } else {
+      group.globalOrder = Math.min(
+        group.globalOrder,
+        Number.isSafeInteger(item.globalOrder) && item.globalOrder >= 0
+          ? item.globalOrder
+          : group.globalOrder,
+      );
+      if ((!group.imageUrl || group.sellerName === "알 수 없는 판매자") && item.imageUrl) {
+        group.imageUrl = item.imageUrl;
+      }
+      if ((!group.sellerUrl || group.sellerName === "알 수 없는 판매자") && item.sellerUrl) {
+        group.sellerUrl = item.sellerUrl;
+        group.sellerName = item.sellerName || group.sellerName;
+      }
+    }
+
+    const candidateSources = Array.isArray(item.sources) ? item.sources : [item.source];
+    for (const source of candidateSources) {
+      if (SOURCES.some((entry) => entry.id === source) && !group.sources.includes(source)) {
+        group.sources.push(source);
+      }
+    }
+
+    const candidateLocations = Array.isArray(item.locations) && item.locations.length
+      ? item.locations
+      : [itemLocation(item)];
+    for (const candidate of candidateLocations) {
+      const location = itemLocation({
+        ...candidate,
+        globalOrder: Number.isSafeInteger(candidate?.globalOrder)
+          ? candidate.globalOrder
+          : item.globalOrder,
+      });
+      if (!location) continue;
+      if (!group.sources.includes(location.source)) group.sources.push(location.source);
+
+      const existing = group.locations.find((entry) => (
+        entry.source === location.source && entry.page === location.page
+      ));
+      if (existing) {
+        existing.orderOnPage = Math.min(existing.orderOnPage, location.orderOnPage);
+        existing.globalOrder = Math.min(existing.globalOrder, location.globalOrder);
+      } else {
+        group.locations.push(location);
+      }
+    }
+  }
+
+  return [...grouped.values()].map((item) => {
+    item.sources.sort((left, right) => sourceOrder(left) - sourceOrder(right));
+    item.locations.sort((left, right) => (
+      sourceOrder(left.source) - sourceOrder(right.source)
+      || left.page - right.page
+      || left.orderOnPage - right.orderOnPage
+    ));
+    const primary = item.locations[0] || itemLocation({ source: item.sources[0] });
+    return {
+      ...item,
+      source: primary?.source || item.sources[0],
+      sourcePageUrl: primary?.sourcePageUrl || "",
+      page: primary?.page || 1,
+      orderOnPage: primary?.orderOnPage || 0,
+    };
+  });
+}
+
 export class BoothAuthError extends Error {
   constructor(message = "BOOTH 로그인이 필요합니다.") {
     super(message);
@@ -153,9 +266,10 @@ export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
     const seller = readSeller(card, pageUrl);
 
     items.push({
-      key: `${source}:${productId}`,
+      key: `product:${productId}`,
       productId,
       source,
+      sources: [source],
       title,
       ...seller,
       imageUrl: readProductImage(card, productId, pageUrl),
@@ -163,6 +277,12 @@ export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
       sourcePageUrl: buildSourcePageUrl(source, page),
       page,
       orderOnPage: items.length,
+      locations: [{
+        source,
+        sourcePageUrl: buildSourcePageUrl(source, page),
+        page,
+        orderOnPage: items.length,
+      }],
     });
   }
 
@@ -244,29 +364,33 @@ export function parseBoothDownloadOptions(html, { productId, pageUrl }) {
 
   const productAnchors = Array.from(documentNode.querySelectorAll('a[href*="/items/"]'))
     .filter((anchor) => extractProductId(anchor.getAttribute("href"), pageUrl) === String(productId));
-  const titleAnchor = productAnchors.find((anchor) => normalizeText(anchor.textContent)) ?? productAnchors[0];
-  if (!titleAnchor) return { found: false, options: [] };
+  if (!productAnchors.length) return { found: false, options: [] };
 
-  const card = findDownloadCard(titleAnchor, String(productId), pageUrl);
-  if (!card) return { found: false, options: [] };
+  const cards = Array.from(new Set(
+    productAnchors
+      .map((anchor) => findDownloadCard(anchor, String(productId), pageUrl))
+      .filter(Boolean),
+  ));
+  if (!cards.length) return { found: true, options: [] };
 
   const seen = new Set();
   const options = [];
-  const controls = Array.from(card.querySelectorAll(DOWNLOAD_CONTROL_SELECTOR));
+  for (const card of cards) {
+    const controls = Array.from(card.querySelectorAll(DOWNLOAD_CONTROL_SELECTOR));
+    for (const control of controls) {
+      const rawUrl = control.getAttribute("data-href") || control.getAttribute("href");
+      const url = sanitizeDownloadUrl(rawUrl, pageUrl);
+      if (!url || seen.has(url)) continue;
 
-  for (const control of controls) {
-    const rawUrl = control.getAttribute("data-href") || control.getAttribute("href");
-    const url = sanitizeDownloadUrl(rawUrl, pageUrl);
-    if (!url || seen.has(url)) continue;
-
-    seen.add(url);
-    const fallback = `다운로드 파일 ${options.length + 1}`;
-    const copy = splitDownloadLabel(readDownloadLabel(control, card, options.length), fallback);
-    options.push({
-      id: new URL(url).pathname.match(/\/downloadables\/(\d+)/)?.[1] || String(options.length + 1),
-      ...copy,
-      url,
-    });
+      seen.add(url);
+      const fallback = `다운로드 파일 ${options.length + 1}`;
+      const copy = splitDownloadLabel(readDownloadLabel(control, card, options.length), fallback);
+      options.push({
+        id: new URL(url).pathname.match(/\/downloadables\/(\d+)/)?.[1] || String(options.length + 1),
+        ...copy,
+        url,
+      });
+    }
   }
 
   return { found: true, options };
@@ -452,34 +576,64 @@ async function fetchWithRetry(url, attempts = 3) {
 }
 
 export async function loadBoothDownloadOptions(item) {
-  const sourceConfig = SOURCES.find((entry) => entry.id === item?.source);
-  if (!sourceConfig || !/^\d+$/.test(String(item?.productId || ""))) {
+  if (!/^\d+$/.test(String(item?.productId || ""))) {
     throw new Error("다운로드할 상품 정보가 올바르지 않습니다.");
   }
 
-  const pageUrl = sanitizeSourcePageUrl(item.sourcePageUrl, item.source, item.page);
-  if (!isAllowedLibraryUrl(pageUrl, sourceConfig.path)) {
-    throw new Error("허용되지 않은 BOOTH 주소 요청을 차단했습니다.");
+  const candidates = Array.isArray(item.locations) && item.locations.length
+    ? item.locations
+    : [item];
+  const locations = [];
+  const seenPages = new Set();
+
+  for (const candidate of candidates) {
+    const sourceConfig = SOURCES.find((entry) => entry.id === candidate?.source);
+    if (!sourceConfig) continue;
+    const pageUrl = sanitizeSourcePageUrl(
+      candidate.sourcePageUrl,
+      candidate.source,
+      candidate.page,
+    );
+    if (!isAllowedLibraryUrl(pageUrl, sourceConfig.path)) continue;
+    const pageKey = `${candidate.source}:${pageUrl}`;
+    if (seenPages.has(pageKey)) continue;
+    seenPages.add(pageKey);
+    locations.push({ source: candidate.source, pageUrl });
   }
 
-  const html = await fetchWithRetry(pageUrl);
-  const result = parseBoothDownloadOptions(html, {
-    productId: item.productId,
-    pageUrl,
+  if (!locations.length) {
+    throw new Error("다운로드할 상품 정보가 올바르지 않습니다.");
+  }
+
+  const results = await runPool(locations, 2, async ({ pageUrl }) => {
+    const html = await fetchWithRetry(pageUrl);
+    return parseBoothDownloadOptions(html, {
+      productId: item.productId,
+      pageUrl,
+    });
   });
 
-  if (!result.found) {
+  const found = results.some((result) => result.found);
+  const options = [];
+  const seenOptions = new Set();
+  for (const option of results.flatMap((result) => result.options)) {
+    if (seenOptions.has(option.url)) continue;
+    seenOptions.add(option.url);
+    options.push(option);
+  }
+
+  if (!found) {
     const error = new Error("현재 페이지에서 상품을 찾지 못했어요. 전체 동기화 후 다시 시도해 주세요.");
     error.code = "PRODUCT_NOT_FOUND";
     throw error;
   }
-  if (!result.options.length) {
+  if (!options.length) {
     const error = new Error("이 상품에서 바로 받을 수 있는 다운로드 파일을 찾지 못했어요.");
     error.code = "DOWNLOADS_NOT_FOUND";
     throw error;
   }
 
-  return result.options;
+  return options;
 }
 
 async function runPool(tasks, concurrency, worker) {
@@ -624,7 +778,7 @@ export async function syncBoothLibrary(onProgress = () => {}) {
     })
     .map((item, globalOrder) => ({ ...item, globalOrder }));
 
-  const uniqueItems = Array.from(new Map(items.map((item) => [item.key, item])).values());
+  const uniqueItems = groupBoothLibraryItems(items);
   onProgress({
     phase: "complete",
     completed: total,
