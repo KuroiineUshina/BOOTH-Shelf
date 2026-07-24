@@ -8,10 +8,13 @@ import {
   folderDepth,
   getFolderPath,
   itemHasSource,
+  matchingDownloadFiles,
   moveFolder,
   renameFolder,
   setItemFolderAssignment,
+  setItemsFolderAssignment,
   sortItems,
+  updateSortMode,
 } from "./domain.js";
 import {
   BoothAuthError,
@@ -33,7 +36,15 @@ import {
   saveState,
 } from "./storage.js";
 import { startBoothDownload } from "./download.js";
-import { suggestAvatarSearchTerms } from "./search.js";
+import {
+  applyDocumentTranslations,
+  formatLocalizedDate,
+  formatLocalizedNumber,
+  getLocale,
+  resolveLocale,
+  setLocale,
+  t,
+} from "./i18n.js";
 
 const PAGE_SIZE = 48;
 const CARD_CACHE_LIMIT = PAGE_SIZE * 4;
@@ -43,9 +54,15 @@ const STATE_LOCK_NAME = "booth-shelf-state-write";
 const SPENDING_LOCK_NAME = "booth-shelf-spending-scan";
 const BOOTH_HOST_PERMISSION = "https://accounts.booth.pm/*";
 const CARD_FLIP_FOCUS_DELAY_MS = 360;
-const ITEM_DRAG_MIME = "application/x-booth-shelf-item";
 const DRAG_CLICK_SUPPRESSION_MS = 320;
+const POINTER_DRAG_THRESHOLD_PX = 7;
 const DROP_SUCCESS_DURATION_MS = 760;
+const LOCALE_SEQUENCE = Object.freeze(["ko", "en", "ja"]);
+const LOCALE_NAMES = Object.freeze({
+  ko: "한국어",
+  en: "English",
+  ja: "日本語",
+});
 
 const ui = {
   source: "all",
@@ -69,43 +86,56 @@ const ui = {
   syncing: false,
   calculatingSpending: false,
 };
+const selectedItemKeys = new Set();
 
 let state;
 let preferences;
 let spendingSummary;
 let renderTimer;
 let dropSuccessTimer;
+let loadMoreObserver;
+let themeSwitchFrame;
 let hasShownCards = false;
 let fallbackSaveQueue = Promise.resolve();
 const downloadCardStates = new Map();
 const itemDrag = {
-  itemKey: null,
+  itemKeys: [],
+  originItemKey: null,
   target: null,
-  blockedByControl: false,
   openedSidebar: false,
   suppressClickUntil: 0,
+  pointerId: null,
+  pointerStartX: 0,
+  pointerStartY: 0,
+  pointerOffsetX: 0,
+  pointerOffsetY: 0,
+  pointerCard: null,
+  preview: null,
+  previewWidth: 0,
+  previewHeight: 0,
 };
 
 const refs = Object.fromEntries(
   [
     "sidebar", "sidebar-close", "sidebar-open", "sidebar-backdrop",
-    "all-count", "purchased-count", "gift-count", "favorites-count",
+    "all-count", "purchased-count", "gift-count", "free-count", "favorites-count",
     "favorites-nav", "add-root-folder", "all-folders", "unfiled-folder",
     "unfiled-count", "folder-drop-hint", "folder-tree", "folder-actions", "add-child-folder",
     "rename-folder", "move-folder", "delete-folder", "search-input",
-    "search-field", "search-suggestions", "sync-button", "view-eyebrow", "view-title",
+    "search-field", "sync-button", "view-eyebrow", "view-title",
     "view-description", "last-sync", "purchase-sort-select", "name-sort-select", "sync-panel",
     "sync-message", "sync-detail", "sync-progress", "login-link",
-    "result-summary", "clear-filter", "item-grid", "empty-state",
+    "result-summary", "selection-summary", "selection-count", "selection-clear",
+    "clear-filter", "item-grid", "empty-state",
     "empty-title", "empty-description", "empty-sync-button",
-    "empty-login-link", "load-more-wrap", "load-more", "toast",
+    "empty-login-link", "load-more-sentinel", "toast",
     "folder-dialog", "folder-form", "folder-dialog-title",
     "folder-name-field", "folder-name-input", "folder-parent-field",
     "folder-parent-select", "folder-form-error", "folder-submit",
     "assign-dialog", "assign-form", "assign-item-name",
     "assign-folder-select", "confirm-dialog", "confirm-form", "confirm-copy",
     "clear-local-data", "data-delete-dialog", "data-delete-form",
-    "theme-toggle", "theme-toggle-icon", "theme-toggle-label",
+    "theme-toggle", "theme-toggle-icon", "language-toggle",
     "red-pill-button", "red-pill-dialog", "red-pill-intro",
     "red-pill-progress", "red-pill-progress-message", "red-pill-progress-detail",
     "red-pill-progress-value", "red-pill-result", "red-pill-total",
@@ -136,7 +166,7 @@ function demoState() {
     ["Warm Skin Materials", "Peach Lab", "purchased"],
     ["Quiet Cafe World", "Blue Hour", "purchased"],
     ["Ribbon Accessory Kit", "Fine Loop", "gift"],
-    ["ミルティナ Casual Set", "Mono Tools", "purchased"],
+    ["ミルティナ Casual Set", "Mono Tools", "free"],
   ];
 
   const items = samples.map(([title, sellerName, source], index) => ({
@@ -146,21 +176,29 @@ function demoState() {
     sources: index === 0 ? ["purchased", "gift"] : [source],
     title,
     sellerName,
-    sellerUrl: "",
-    imageUrl: "",
+    sellerUrl: `https://demo-seller-${index + 1}.booth.pm/`,
+    imageUrl: index === 0 ? "assets/icon128.png" : "",
     productUrl: "https://booth.pm/",
     sourcePageUrl: source === "gift"
       ? "https://accounts.booth.pm/library/gifts?page=1"
-      : "https://accounts.booth.pm/library?page=1",
+      : source === "free"
+        ? "https://accounts.booth.pm/library/free_downloads?page=1"
+        : "https://accounts.booth.pm/library?page=1",
     page: 1,
     orderOnPage: index,
     globalOrder: index,
+    downloadFiles: Array.from({ length: index === 0 ? 4 : (index % 3) + 1 }, (_, fileIndex) => ({
+      label: `${title.replace(/\s+/gu, "_")}_${fileIndex + 1}.zip`,
+      detail: `${18 + (index * 7) + (fileIndex * 11)} MB`,
+    })),
     locations: [
       {
         source,
         sourcePageUrl: source === "gift"
           ? "https://accounts.booth.pm/library/gifts?page=1"
-          : "https://accounts.booth.pm/library?page=1",
+          : source === "free"
+            ? "https://accounts.booth.pm/library/free_downloads?page=1"
+            : "https://accounts.booth.pm/library?page=1",
         page: 1,
         orderOnPage: index,
         globalOrder: index,
@@ -176,7 +214,7 @@ function demoState() {
   }));
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     items,
     folders,
     favorites: [items[0].key, items[4].key, items[8].key],
@@ -204,47 +242,108 @@ function element(tag, options = {}) {
   return node;
 }
 
+function lucideIcon(name, className = "") {
+  return element("span", {
+    className: `${className ? `${className} ` : ""}licon licon-${name}`,
+    attrs: { "aria-hidden": "true" },
+  });
+}
+
+function setLucideIcon(node, name) {
+  if (!node) return;
+  for (const className of [...node.classList]) {
+    if (className.startsWith("licon-")) node.classList.remove(className);
+  }
+  node.classList.add("licon", `licon-${name}`);
+}
+
 function formatCount(value) {
-  return Number(value || 0).toLocaleString("ko-KR");
+  return formatLocalizedNumber(value);
 }
 
 function formatMoney(amount, currency = "JPY") {
   const value = Number(amount || 0);
-  if (currency === "JPY") return `${Math.round(value).toLocaleString("ko-KR")}엔`;
-  return `${value.toLocaleString("ko-KR", { maximumFractionDigits: 2 })} ${currency}`;
+  if (currency === "JPY") {
+    return t("{amount}엔", { amount: formatLocalizedNumber(Math.round(value)) });
+  }
+  return `${formatLocalizedNumber(value, { maximumFractionDigits: 2 })} ${currency}`;
 }
 
 function applyTheme(theme) {
   const normalized = theme === "dark" ? "dark" : "light";
-  document.documentElement.dataset.theme = normalized;
+  const root = document.documentElement;
+  window.cancelAnimationFrame(themeSwitchFrame);
+  root.classList.add("is-theme-switching");
+  root.dataset.theme = normalized;
   const dark = normalized === "dark";
   refs["theme-toggle"].setAttribute("aria-pressed", String(dark));
-  refs["theme-toggle"].setAttribute("aria-label", dark ? "라이트 모드로 전환" : "다크 모드로 전환");
-  refs["theme-toggle-icon"].textContent = dark ? "☀" : "☾";
-  refs["theme-toggle-label"].textContent = dark ? "라이트" : "다크";
+  refs["theme-toggle"].setAttribute("aria-label", t(dark ? "라이트 모드로 전환" : "다크 모드로 전환"));
+  setLucideIcon(refs["theme-toggle-icon"], dark ? "sun" : "moon");
+  void root.offsetWidth;
+  themeSwitchFrame = window.requestAnimationFrame(() => {
+    root.classList.remove("is-theme-switching");
+  });
+}
+
+function applyLocalePreference(localePreference) {
+  const browserLocale = navigator.languages?.[0] || navigator.language || "ko";
+  const locale = resolveLocale(localePreference, browserLocale);
+  setLocale(locale);
+  applyDocumentTranslations();
+  updateLanguageToggle(locale);
+  applyTheme(preferences?.theme);
+}
+
+function updateLanguageToggle(locale = getLocale()) {
+  const currentIndex = Math.max(0, LOCALE_SEQUENCE.indexOf(locale));
+  const nextLocale = LOCALE_SEQUENCE[(currentIndex + 1) % LOCALE_SEQUENCE.length];
+  const label = t("언어 변경: 현재 {current}, 다음 {next}", {
+    current: LOCALE_NAMES[locale] || LOCALE_NAMES.ko,
+    next: LOCALE_NAMES[nextLocale],
+  });
+  refs["language-toggle"].dataset.locale = locale;
+  refs["language-toggle"].setAttribute("aria-label", label);
+  refs["language-toggle"].title = label;
 }
 
 async function toggleTheme() {
   const nextTheme = preferences?.theme === "dark" ? "light" : "dark";
-  preferences = { theme: nextTheme };
+  preferences = { ...preferences, theme: nextTheme };
   applyTheme(nextTheme);
   try {
     preferences = await savePreferences(preferences);
   } catch (error) {
-    showToast(`테마 설정을 저장하지 못했어요: ${error.message}`, "error");
+    showToast(t("테마 설정을 저장하지 못했어요: {message}", { message: error.message }), "error");
   }
 }
 
+async function changeLocale(locale) {
+  preferences = { ...preferences, locale };
+  applyLocalePreference(locale);
+  render();
+  try {
+    preferences = await savePreferences(preferences);
+  } catch (error) {
+    showToast(t("언어 설정을 저장하지 못했어요: {message}", { message: error.message }), "error");
+  }
+}
+
+async function cycleLocale() {
+  const currentIndex = Math.max(0, LOCALE_SEQUENCE.indexOf(getLocale()));
+  const nextLocale = LOCALE_SEQUENCE[(currentIndex + 1) % LOCALE_SEQUENCE.length];
+  await changeLocale(nextLocale);
+}
+
 function formatSyncTime(value) {
-  if (!value) return "아직 동기화하지 않았어요";
+  if (!value) return t("아직 동기화하지 않았어요");
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "동기화 시간 알 수 없음";
-  return `최근 동기화 ${new Intl.DateTimeFormat("ko-KR", {
+  if (Number.isNaN(date.getTime())) return t("동기화 시간 알 수 없음");
+  return t("최근 동기화 {date}", { date: formatLocalizedDate(date, {
     month: "long",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(date)}`;
+  }) });
 }
 
 function persistState({ alreadyLocked = false } = {}) {
@@ -253,7 +352,7 @@ function persistState({ alreadyLocked = false } = {}) {
     return state;
   };
   const reportFailure = (error) => {
-    showToast(`저장하지 못했어요: ${error.message}`, "error");
+    showToast(t("저장하지 못했어요: {message}", { message: error.message }), "error");
     return state;
   };
 
@@ -274,7 +373,7 @@ async function runWithStateLock(task, { wait = false } = {}) {
     wait ? { mode: "exclusive" } : { mode: "exclusive", ifAvailable: true },
     async (lock) => {
       if (!lock) {
-        const error = new Error("다른 BOOTH Shelf 창에서 동기화 또는 삭제 작업이 진행 중입니다.");
+        const error = new Error(t("다른 BOOTH Shelf 창에서 동기화 또는 삭제 작업이 진행 중입니다."));
         error.code = "STATE_BUSY";
         throw error;
       }
@@ -291,7 +390,7 @@ async function runWithSpendingLock(task) {
     { mode: "exclusive", ifAvailable: true },
     async (lock) => {
       if (!lock) {
-        const error = new Error("다른 BOOTH Shelf 창에서 이미 결제 금액을 계산하고 있어요.");
+        const error = new Error(t("다른 BOOTH Shelf 창에서 이미 결제 금액을 계산하고 있어요."));
         error.code = "SPENDING_BUSY";
         throw error;
       }
@@ -319,12 +418,12 @@ function showToast(message, tone = "default") {
 }
 
 function getSpendingVerdict(jpyTotal) {
-  if (jpyTotal === 0) return "아직 빨간약이 투명합니다. 무료 상품 수집가의 기운이 느껴져요.";
-  if (jpyTotal < 50_000) return "아직은 침착합니다. 취향 소비를 꽤 이성적으로 관리하고 있어요.";
-  if (jpyTotal < 150_000) return "취향에 성실한 편이군요. 장바구니와 좋은 관계를 유지 중입니다.";
-  if (jpyTotal < 500_000) return "BOOTH가 당신의 취향을 아주 잘 알고 있습니다.";
-  if (jpyTotal < 1_000_000) return "결제 버튼과 오래 알고 지낸 사이군요. 빨간약이 제법 진합니다.";
-  return "빨간약 최대 농도. 이제 라이브러리가 하나의 세계관입니다.";
+  if (jpyTotal === 0) return t("아직 빨간약이 투명합니다. 무료 상품 수집가의 기운이 느껴져요.");
+  if (jpyTotal < 50_000) return t("아직은 침착합니다. 취향 소비를 꽤 이성적으로 관리하고 있어요.");
+  if (jpyTotal < 150_000) return t("취향에 성실한 편이군요. 장바구니와 좋은 관계를 유지 중입니다.");
+  if (jpyTotal < 500_000) return t("BOOTH가 당신의 취향을 아주 잘 알고 있습니다.");
+  if (jpyTotal < 1_000_000) return t("결제 버튼과 오래 알고 지낸 사이군요. 빨간약이 제법 진합니다.");
+  return t("빨간약 최대 농도. 이제 라이브러리가 하나의 세계관입니다.");
 }
 
 function setRedPillProgress({ message, detail = "", percent = 0 }) {
@@ -346,24 +445,26 @@ function renderSpendingSummary(summary) {
   refs["red-pill-error"].hidden = true;
   refs["red-pill-result"].hidden = false;
   refs["red-pill-total"].textContent = formatMoney(primary[1], primary[0]);
-  refs["red-pill-order-count"].textContent = `${formatCount(summary.orderCount)}건`;
-  refs["red-pill-free-count"].textContent = `${formatCount(summary.freeOrderCount)}건`;
+  refs["red-pill-order-count"].textContent = t("{count}건", { count: formatCount(summary.orderCount) });
+  refs["red-pill-free-count"].textContent = t("{count}건", { count: formatCount(summary.freeOrderCount) });
   refs["red-pill-average"].textContent = entries.length === 1 && summary.orderCount
     ? formatMoney(primary[1] / summary.orderCount, primary[0])
-    : summary.orderCount ? "통화별 집계" : formatMoney(0, primary[0]);
+    : summary.orderCount ? t("통화별 집계") : formatMoney(0, primary[0]);
   refs["red-pill-verdict"].textContent = getSpendingVerdict(summary.totals.JPY || 0);
-  refs["red-pill-calculated-at"].textContent = `마지막 계산 ${new Intl.DateTimeFormat("ko-KR", {
+  refs["red-pill-calculated-at"].textContent = t("마지막 계산 {date}", { date: formatLocalizedDate(new Date(summary.scannedAt), {
     year: "numeric",
     month: "long",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(summary.scannedAt))}`;
+  }) });
   refs["red-pill-other-currencies"].hidden = !otherEntries.length;
   refs["red-pill-other-currencies"].textContent = otherEntries.length
-    ? `다른 통화: ${otherEntries.map(([currency, amount]) => formatMoney(amount, currency)).join(" · ")}`
+    ? t("다른 통화: {amounts}", {
+      amounts: otherEntries.map(([currency, amount]) => formatMoney(amount, currency)).join(" · "),
+    })
     : "";
-  refs["red-pill-calculate"].textContent = "다시 계산";
+  refs["red-pill-calculate"].textContent = t("다시 계산");
 }
 
 function showRedPillError(error) {
@@ -371,15 +472,15 @@ function showRedPillError(error) {
   refs["red-pill-progress"].hidden = true;
   refs["red-pill-result"].hidden = true;
   refs["red-pill-error"].hidden = false;
-  refs["red-pill-error"].textContent = error?.message || "결제 금액을 계산하지 못했어요.";
+  refs["red-pill-error"].textContent = error?.message || t("결제 금액을 계산하지 못했어요.");
 }
 
 async function runDemoSpending() {
   const phases = [
-    [18, "구매 내역 페이지 확인 중"],
-    [52, "완료된 주문 모으는 중"],
-    [82, "결제 금액 더하는 중"],
-    [100, "빨간약 제조 완료"],
+    [18, t("구매 내역 페이지 확인 중")],
+    [52, t("완료된 주문 모으는 중")],
+    [82, t("결제 금액 더하는 중")],
+    [100, t("빨간약 제조 완료")],
   ];
   for (const [percent, message] of phases) {
     setRedPillProgress({ message, detail: `${percent}%`, percent });
@@ -396,7 +497,7 @@ async function runDemoSpending() {
 async function calculateSpending() {
   if (ui.calculatingSpending) return;
   if (ui.syncing) {
-    showRedPillError(new Error("전체 동기화가 끝난 뒤 계산해 주세요."));
+    showRedPillError(new Error(t("전체 동기화가 끝난 뒤 계산해 주세요.")));
     return;
   }
   ui.calculatingSpending = true;
@@ -404,14 +505,18 @@ async function calculateSpending() {
   refs["red-pill-button"].disabled = true;
   refs["sync-button"].disabled = true;
   refs["clear-local-data"].disabled = true;
-  refs["red-pill-calculate"].textContent = "계산 중…";
-  setRedPillProgress({ message: "BOOTH 구매 내역 연결 중", detail: "완료 주문만 합산합니다.", percent: 3 });
+  refs["red-pill-calculate"].textContent = t("계산 중…");
+  setRedPillProgress({
+    message: t("BOOTH 구매 내역 연결 중"),
+    detail: t("완료 주문만 합산합니다."),
+    percent: 3,
+  });
 
   try {
     if (!IS_DEMO) {
       const permissionGranted = await requestBoothAccess();
       if (!permissionGranted) {
-        const error = new Error("결제 금액을 계산하려면 BOOTH 계정 페이지 접근을 허용해 주세요.");
+        const error = new Error(t("결제 금액을 계산하려면 BOOTH 계정 페이지 접근을 허용해 주세요."));
         error.code = "PERMISSION_REQUIRED";
         throw error;
       }
@@ -422,17 +527,19 @@ async function calculateSpending() {
       : await runWithSpendingLock(() => calculateBoothSpending((progress) => {
         setRedPillProgress({
           message: progress.message,
-          detail: progress.total ? `${progress.completed} / ${progress.total}` : "주문 수를 확인하고 있어요.",
+          detail: progress.total
+            ? `${progress.completed} / ${progress.total}`
+            : t("주문 수를 확인하고 있어요."),
           percent: progress.percent,
         });
       }));
     spendingSummary = await saveSpendingSummary(result);
     renderSpendingSummary(spendingSummary);
-    showToast("BOOTH 결제 금액 계산을 마쳤어요.");
+    showToast(t("BOOTH 결제 금액 계산을 마쳤어요."));
   } catch (error) {
     const authError = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
     showRedPillError(authError
-      ? new Error("같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요.")
+      ? new Error(t("같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요."))
       : error);
   } finally {
     ui.calculatingSpending = false;
@@ -440,7 +547,7 @@ async function calculateSpending() {
     refs["red-pill-button"].disabled = false;
     refs["sync-button"].disabled = false;
     refs["clear-local-data"].disabled = false;
-    refs["red-pill-calculate"].textContent = spendingSummary ? "다시 계산" : "다시 시도";
+    refs["red-pill-calculate"].textContent = t(spendingSummary ? "다시 계산" : "다시 시도");
   }
 }
 
@@ -469,17 +576,17 @@ function getSelectedFolder() {
 function getViewCopy() {
   if (ui.favoritesOnly) {
     return {
-      eyebrow: "빠르게 다시 찾기",
-      title: "즐겨찾기",
-      description: "별표로 표시한 상품만 모아봤어요.",
+      eyebrow: t("빠르게 다시 찾기"),
+      title: t("즐겨찾기"),
+      description: t("별표로 표시한 상품만 모아봤어요."),
     };
   }
 
   if (ui.folderId === "unfiled") {
     return {
-      eyebrow: "정리가 필요한 상품",
-      title: "미분류",
-      description: "아직 폴더에 넣지 않은 상품이에요.",
+      eyebrow: t("정리가 필요한 상품"),
+      title: t("미분류"),
+      description: t("아직 폴더에 넣지 않은 상품이에요."),
     };
   }
 
@@ -487,44 +594,54 @@ function getViewCopy() {
     const folder = state.folders.find((candidate) => candidate.id === ui.folderId);
     const path = folder ? getFolderPath(state.folders, folder.id) : [];
     return {
-      eyebrow: path.slice(0, -1).map((entry) => entry.name).join(" / ") || "내 폴더",
-      title: folder?.name || "폴더",
-      description: "이 폴더에 분류한 상품을 보여드려요.",
+      eyebrow: path.slice(0, -1).map((entry) => entry.name).join(" / ") || t("내 폴더"),
+      title: folder?.name || t("폴더"),
+      description: t("이 폴더에 분류한 상품을 보여드려요."),
     };
   }
 
   if (ui.source === "purchased") {
     return {
-      eyebrow: "내 BOOTH 보관함",
-      title: "구매한 상품",
-      description: "직접 구매해 라이브러리에 보관 중인 상품이에요.",
+      eyebrow: t("내 BOOTH 보관함"),
+      title: t("구매한 상품"),
+      description: t("직접 구매해 라이브러리에 보관 중인 상품이에요."),
     };
   }
 
   if (ui.source === "gift") {
     return {
-      eyebrow: "내 BOOTH 보관함",
-      title: "받은 기프트",
-      description: "선물받아 기프트함에 보관 중인 상품이에요.",
+      eyebrow: t("내 BOOTH 보관함"),
+      title: t("받은 기프트"),
+      description: t("선물받아 기프트함에 보관 중인 상품이에요."),
+    };
+  }
+
+  if (ui.source === "free") {
+    return {
+      eyebrow: t("내 BOOTH 보관함"),
+      title: t("무료 상품"),
+      description: t("무료 다운로드함에 보관 중인 상품이에요."),
     };
   }
 
   return {
-    eyebrow: "내 BOOTH 보관함",
-    title: "전체 상품",
-    description: "구매한 상품과 받은 기프트를 한눈에 확인하세요.",
+    eyebrow: t("내 BOOTH 보관함"),
+    title: t("전체 상품"),
+    description: t("구매한 상품, 받은 기프트와 무료 다운로드를 한눈에 확인하세요."),
   };
 }
 
 function renderNavigation() {
   const purchasedCount = state.items.filter((item) => itemHasSource(item, "purchased")).length;
   const giftCount = state.items.filter((item) => itemHasSource(item, "gift")).length;
+  const freeCount = state.items.filter((item) => itemHasSource(item, "free")).length;
   const favoriteCount = state.favorites.filter((key) => state.items.some((item) => item.key === key)).length;
   const unfiledCount = state.items.filter((item) => !state.assignments[item.key]).length;
 
   refs["all-count"].textContent = formatCount(state.items.length);
   refs["purchased-count"].textContent = formatCount(purchasedCount);
   refs["gift-count"].textContent = formatCount(giftCount);
+  refs["free-count"].textContent = formatCount(freeCount);
   refs["favorites-count"].textContent = formatCount(favoriteCount);
   refs["unfiled-count"].textContent = formatCount(unfiledCount);
 
@@ -554,12 +671,12 @@ function renderFolderBranch(branch, depth = 1) {
         "aria-level": depth,
         "data-folder-id": folder.id,
         "data-drop-folder-id": folder.id,
-        title: `${folder.name} 폴더 · 상품 카드를 끌어 놓아 분류`,
+        title: t("{name} 폴더 · 상품 카드를 끌어 놓아 분류", { name: folder.name }),
       },
     });
     row.style.setProperty("--folder-depth", String(depth - 1));
     row.append(
-      element("span", { className: "folder-glyph", text: folder.children.length ? "▰" : "▱", attrs: { "aria-hidden": "true" } }),
+      lucideIcon(folder.children.length ? "folders" : "folder", "folder-glyph"),
       element("span", { className: "folder-name", text: folder.name }),
       element("span", { className: "folder-count", text: formatCount(directFolderCount(folder.id)) }),
     );
@@ -579,12 +696,15 @@ function renderFolderBranch(branch, depth = 1) {
 
 function renderFolders() {
   refs["folder-tree"].replaceChildren(renderFolderBranch(buildFolderTree(state.folders)));
+  if (!document.body.classList.contains("is-item-dragging")) {
+    refs["folder-drop-hint"].textContent = t("카드를 폴더에 끌어 놓아 분류");
+  }
   const selected = getSelectedFolder();
   refs["folder-actions"].hidden = !selected;
   if (selected) {
     const depth = folderDepth(state.folders, selected.id);
     refs["add-child-folder"].disabled = depth >= MAX_FOLDER_DEPTH;
-    refs["add-child-folder"].title = depth >= MAX_FOLDER_DEPTH ? "폴더는 3계층까지 만들 수 있어요." : "";
+    refs["add-child-folder"].title = depth >= MAX_FOLDER_DEPTH ? t("폴더는 3계층까지 만들 수 있어요.") : "";
   }
 }
 
@@ -603,7 +723,10 @@ function demoDownloadOptions(item) {
   const optionCount = sampleNumber === 1 ? 10 : (sampleNumber % 3) + 1;
   return Array.from({ length: optionCount }, (_, index) => ({
     id: `demo-${sampleNumber}-${index + 1}`,
-    label: `${item.title} ${index ? `추가 파일 ${index + 1}` : "메인 파일"}.zip`,
+    label: t("{title} {kind}.zip", {
+      title: item.title,
+      kind: index ? t("추가 파일 {number}", { number: index + 1 }) : t("메인 파일"),
+    }),
     detail: `${18 + (sampleNumber * 7) + (index * 13)} MB`,
     url: `https://booth.pm/downloadables/${9_000_000 + (sampleNumber * 20) + index}?variation_id=${sampleNumber}`,
   }));
@@ -613,7 +736,7 @@ function createDownloadBack(item, downloadState) {
   const back = element("section", {
     className: "item-card-face item-card-back",
     attrs: {
-      "aria-label": `${item.title} 다운로드 옵션`,
+      "aria-label": t("{title} 다운로드 옵션", { title: item.title }),
       "aria-hidden": String(!downloadState.flipped),
     },
   });
@@ -627,13 +750,13 @@ function createDownloadBack(item, downloadState) {
   );
   const closeButton = element("button", {
     className: "download-close-button",
-    text: "←",
     attrs: {
       type: "button",
       "data-download-close": item.key,
-      "aria-label": "상품 카드로 돌아가기",
+      "aria-label": t("상품 카드로 돌아가기"),
     },
   });
+  closeButton.append(lucideIcon("arrow-left"));
   header.append(headingCopy, closeButton);
 
   const body = element("div", {
@@ -645,43 +768,47 @@ function createDownloadBack(item, downloadState) {
     const loading = element("div", { className: "download-state" });
     loading.append(
       element("span", { className: "download-spinner", attrs: { "aria-hidden": "true" } }),
-      element("strong", { text: "다운로드 목록 불러오는 중" }),
-      element("p", { text: "BOOTH에서 최신 파일 정보를 확인하고 있어요." }),
+      element("strong", { text: t("다운로드 목록 불러오는 중") }),
+      element("p", { text: t("BOOTH에서 최신 파일 정보를 확인하고 있어요.") }),
     );
     body.append(loading);
   } else if (downloadState.status === "error") {
     const failed = element("div", { className: "download-state download-error-state" });
     failed.append(
-      element("span", { className: "download-error-mark", text: "!", attrs: { "aria-hidden": "true" } }),
-      element("strong", { text: "다운로드 목록을 불러오지 못했어요" }),
-      element("p", { text: downloadState.error || "잠시 후 다시 시도해 주세요." }),
+      lucideIcon("circle-alert", "download-error-mark"),
+      element("strong", { text: t("다운로드 목록을 불러오지 못했어요") }),
+      element("p", { text: downloadState.error || t("잠시 후 다시 시도해 주세요.") }),
     );
     const retry = element("button", {
       className: "download-retry-button",
-      text: "다시 시도",
+      text: t("다시 시도"),
       attrs: { type: "button", "data-download-retry": item.key },
     });
     failed.append(retry);
     if (item.productUrl) {
-      failed.append(element("a", {
+      const productLink = element("a", {
         className: "download-product-link",
-        text: "상품 상세 페이지 열기 ↗",
+        text: t("상품 상세 페이지 열기"),
         attrs: {
           href: item.productUrl,
           target: "_blank",
           rel: "noopener noreferrer",
         },
-      }));
+      });
+      productLink.append(lucideIcon("external-link", "download-product-link-icon"));
+      failed.append(productLink);
     }
     body.append(failed);
   } else if (downloadState.status === "ready") {
     body.append(element("p", {
       className: "download-list-summary",
-      text: `${formatCount(downloadState.options.length)}개의 파일 · 누르면 바로 다운로드`,
+      text: t("{count}개의 파일 · 누르면 바로 다운로드", {
+        count: formatCount(downloadState.options.length),
+      }),
     }));
     const list = element("div", {
       className: "download-option-list",
-      attrs: { role: "list", "aria-label": "다운로드할 파일" },
+      attrs: { role: "list", "aria-label": t("다운로드할 파일") },
     });
     downloadState.options.forEach((option, optionIndex) => {
       const button = element("button", {
@@ -691,25 +818,27 @@ function createDownloadBack(item, downloadState) {
           role: "listitem",
           "data-download-key": item.key,
           "data-download-option-index": optionIndex,
-          "aria-label": `${option.label}${option.detail ? `, ${option.detail}` : ""} 다운로드`,
+          "aria-label": t("{file} 다운로드", {
+            file: `${option.label}${option.detail ? `, ${option.detail}` : ""}`,
+          }),
         },
       });
       const copy = element("span", { className: "download-option-copy" });
       copy.append(
         element("strong", { text: option.label, attrs: { title: option.label } }),
-        element("small", { text: option.detail || "BOOTH 다운로드" }),
+        element("small", { text: option.detail || t("BOOTH 다운로드") }),
       );
       button.append(
         element("span", { className: "download-file-index", text: String(optionIndex + 1).padStart(2, "0"), attrs: { "aria-hidden": "true" } }),
         copy,
-        element("span", { className: "download-option-arrow", text: "↓", attrs: { "aria-hidden": "true" } }),
+        lucideIcon("download", "download-option-arrow"),
       );
       list.append(button);
     });
     body.append(list);
   } else {
     const idle = element("div", { className: "download-state" });
-    idle.append(element("p", { text: "다운로드하기를 누르면 파일 목록을 확인합니다." }));
+    idle.append(element("p", { text: t("다운로드하기를 누르면 파일 목록을 확인합니다.") }));
     body.append(idle);
   }
 
@@ -717,15 +846,60 @@ function createDownloadBack(item, downloadState) {
   return back;
 }
 
+function createDownloadSearchMatch(item) {
+  if (!ui.query || !["all", "download"].includes(ui.searchField)) return null;
+  const matches = matchingDownloadFiles(item, ui.query);
+  if (!matches.length) return null;
+
+  const match = element("div", {
+    className: "download-search-match",
+    attrs: {
+      title: matches.map((file) => file.label).join("\n"),
+      "aria-label": t("일치하는 다운로드 파일 {count}개: {files}", {
+        count: matches.length,
+        files: matches.map((file) => file.label).join(", "),
+      }),
+    },
+  });
+  match.append(
+    lucideIcon("download", "download-search-match-icon"),
+    element("span", { className: "download-search-match-name", text: matches[0].label }),
+  );
+  if (matches.length > 1) {
+    match.append(element("span", {
+      className: "download-search-match-count",
+      text: `+${matches.length - 1}`,
+    }));
+  }
+  return match;
+}
+
+function updateCardSearchMatch(card, item) {
+  const currentMatch = card.querySelector(".download-search-match");
+  const nextMatch = createDownloadSearchMatch(item);
+  if (currentMatch && nextMatch) {
+    currentMatch.replaceWith(nextMatch);
+    return;
+  }
+  if (currentMatch) {
+    currentMatch.remove();
+    return;
+  }
+  const revealButton = card.querySelector(".download-reveal-button");
+  if (nextMatch && revealButton) revealButton.before(nextMatch);
+}
+
 function createCard(item, index) {
   const downloadState = getDownloadCardState(item.key);
+  const isSelected = selectedItemKeys.has(item.key);
   const card = element("article", {
-    className: `item-card${downloadState.flipped ? " is-flipped" : ""}`,
+    className: `item-card${downloadState.flipped ? " is-flipped" : ""}${isSelected ? " is-multi-selected" : ""}`,
     attrs: {
       "data-item-key": item.key,
-      draggable: downloadState.flipped ? "false" : "true",
+      draggable: "false",
       "aria-grabbed": "false",
-      title: downloadState.flipped ? null : "폴더로 끌어 놓아 정리",
+      "aria-selected": String(isSelected),
+      title: downloadState.flipped ? null : t("카드 이미지·여백을 클릭해 선택 또는 해제 · 선택한 카드를 폴더로 끌어 놓아 정리"),
     },
   });
   card.style.setProperty("--card-index", String(Math.min(index, 12)));
@@ -756,14 +930,51 @@ function createCard(item, index) {
 
   const isPurchased = itemHasSource(item, "purchased");
   const isGift = itemHasSource(item, "gift");
-  const sourceClass = isPurchased && isGift ? "mixed" : isGift ? "gift" : "purchased";
-  visual.append(element("span", {
+  const isFree = itemHasSource(item, "free");
+  const assignedFolderId = state.assignments[item.key];
+  const sourceLabels = [
+    isPurchased ? t("구매") : "",
+    isGift ? t("선물") : "",
+    isFree ? t("무료") : "",
+  ].filter(Boolean);
+  const sourceClass = sourceLabels.length > 1
+    ? "mixed"
+    : isGift ? "gift" : isFree ? "free" : "purchased";
+  const sourceBadge = element("span", {
     className: `source-badge source-${sourceClass}`,
-    text: isPurchased && isGift ? "BOUGHT + GIFT" : isGift ? "GIFT" : "BOUGHT",
-  }));
+    text: sourceLabels.join(" + "),
+  });
+  const selectionBadge = element("span", {
+    className: "item-selection-badge",
+    text: t("선택됨"),
+    attrs: { "aria-hidden": "true" },
+  });
+  const visualControls = element("div", { className: "item-visual-controls" });
+  visualControls.append(selectionBadge);
+  const visualHeader = element("div", { className: "item-visual-header" });
+  visualHeader.append(sourceBadge, visualControls);
+  visual.append(visualHeader);
 
   const content = element("div", { className: "item-content" });
-  const seller = element("p", { className: "item-seller", text: item.sellerName || "알 수 없는 판매자" });
+  const sellerName = !item.sellerName || item.sellerName === "알 수 없는 판매자"
+    ? t("알 수 없는 판매자")
+    : item.sellerName;
+  const seller = element("p", { className: "item-seller" });
+  if (item.sellerUrl) {
+    seller.append(element("a", {
+      className: "item-seller-link",
+      text: sellerName,
+      attrs: {
+        href: item.sellerUrl,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        draggable: "false",
+        "aria-label": t("{seller} BOOTH 상점 페이지 열기", { seller: sellerName }),
+      },
+    }));
+  } else {
+    seller.textContent = sellerName;
+  }
   const title = item.productUrl
     ? element("a", {
       className: "item-title",
@@ -773,7 +984,7 @@ function createCard(item, index) {
         target: "_blank",
         rel: "noopener noreferrer",
         draggable: "false",
-        "aria-label": `${item.title} 상품 상세 페이지 열기`,
+        "aria-label": t("{title} 상품 상세 페이지 열기", { title: item.title }),
       },
     })
     : element("span", { className: "item-title item-title-disabled", text: item.title });
@@ -782,17 +993,19 @@ function createCard(item, index) {
     attrs: {
       type: "button",
       "data-download-reveal": item.key,
-      "aria-label": `${item.title} 다운로드 옵션 보기`,
+      "aria-label": t("{title} 다운로드 옵션 보기", { title: item.title }),
     },
   });
   revealButton.append(
-    element("span", { className: "download-reveal-icon", text: "↓", attrs: { "aria-hidden": "true" } }),
-    element("span", { text: "다운로드하기" }),
-    element("span", { className: "download-reveal-arrow", text: "›", attrs: { "aria-hidden": "true" } }),
+    lucideIcon("download", "download-reveal-icon"),
+    element("span", { text: t("다운로드하기") }),
+    lucideIcon("chevron-right", "download-reveal-arrow"),
   );
-  content.append(seller, title, revealButton);
+  content.append(seller, title);
+  const downloadMatch = createDownloadSearchMatch(item);
+  if (downloadMatch) content.append(downloadMatch);
+  content.append(revealButton);
 
-  const assignedFolderId = state.assignments[item.key];
   if (assignedFolderId) {
     const path = getFolderPath(state.folders, assignedFolderId);
     if (path.length) {
@@ -807,20 +1020,20 @@ function createCard(item, index) {
   const actions = element("div", { className: "item-actions" });
   const assignButton = element("button", {
     className: "organize-button",
-    text: assignedFolderId ? "폴더 변경" : "폴더에 넣기",
+    text: t(assignedFolderId ? "폴더 변경" : "폴더에 넣기"),
     attrs: { type: "button", "data-assign-key": item.key },
   });
   const isFavorite = state.favorites.includes(item.key);
   const favoriteButton = element("button", {
     className: `favorite-button${isFavorite ? " is-favorite" : ""}`,
-    text: isFavorite ? "★" : "☆",
     attrs: {
       type: "button",
       "data-favorite-key": item.key,
-      "aria-label": isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가",
+      "aria-label": t(isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가"),
       "aria-pressed": String(isFavorite),
     },
   });
+  favoriteButton.append(lucideIcon("star"));
   actions.append(assignButton, favoriteButton);
   content.append(actions);
   front.append(visual, content);
@@ -836,6 +1049,60 @@ function findItem(itemKey) {
 function findRenderedCard(itemKey) {
   return Array.from(refs["item-grid"].querySelectorAll(".item-card[data-item-key]"))
     .find((card) => card.dataset.itemKey === itemKey) ?? null;
+}
+
+function syncSelectionUI() {
+  const selectedCards = [];
+  for (const card of refs["item-grid"].querySelectorAll(".item-card[data-item-key]")) {
+    const selected = selectedItemKeys.has(card.dataset.itemKey);
+    if (card.classList.contains("is-multi-selected") !== selected) {
+      card.classList.toggle("is-multi-selected", selected);
+    }
+    if (card.getAttribute("aria-selected") !== String(selected)) {
+      card.setAttribute("aria-selected", String(selected));
+    }
+    if (selected) selectedCards.push(card);
+  }
+
+  selectedCards.forEach((card, index) => {
+    const badge = card.querySelector(".item-selection-badge");
+    const selectionNumber = String(index + 1);
+    if (badge && badge.textContent !== selectionNumber) {
+      badge.textContent = selectionNumber;
+    }
+  });
+
+  const selectionCount = formatCount(selectedItemKeys.size);
+  if (refs["selection-count"].textContent !== selectionCount) {
+    refs["selection-count"].textContent = selectionCount;
+  }
+  const selectionIsEmpty = selectedItemKeys.size === 0;
+  if (refs["selection-summary"].hidden !== selectionIsEmpty) {
+    refs["selection-summary"].hidden = selectionIsEmpty;
+  }
+}
+
+function clearItemSelection() {
+  if (!selectedItemKeys.size) return false;
+  selectedItemKeys.clear();
+  syncSelectionUI();
+  return true;
+}
+
+function toggleItemSelection(itemKey) {
+  const item = findItem(itemKey);
+  const card = findRenderedCard(itemKey);
+  if (!item || !card || card.classList.contains("is-flipped")) return false;
+  if (selectedItemKeys.has(itemKey)) selectedItemKeys.delete(itemKey);
+  else selectedItemKeys.add(itemKey);
+  syncSelectionUI();
+  return true;
+}
+
+function pruneItemSelection(allowedKeys) {
+  for (const itemKey of selectedItemKeys) {
+    if (!allowedKeys.has(itemKey)) selectedItemKeys.delete(itemKey);
+  }
 }
 
 function clearFolderDropSuccess() {
@@ -858,19 +1125,99 @@ function isInteractiveDragOrigin(target) {
     && Boolean(target.closest("a, button, input, select, textarea, [contenteditable='true']"));
 }
 
-function createItemDragPreview(item) {
-  const preview = element("div", { className: "item-drag-preview" });
-  const copy = element("span", { className: "item-drag-preview-copy" });
-  copy.append(
-    element("strong", { text: item.title }),
-    element("small", { text: "폴더로 이동" }),
-  );
-  preview.append(
-    element("span", { className: "item-drag-preview-icon", text: "▰", attrs: { "aria-hidden": "true" } }),
-    copy,
-  );
+function cloneCardFrontForDrag(item) {
+  const card = findRenderedCard(item.key);
+  const front = card?.querySelector(".item-card-front");
+  if (!front) return null;
+
+  const clone = front.cloneNode(true);
+  clone.classList.add("item-drag-preview-face");
+  clone.setAttribute("aria-hidden", "true");
+  clone.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+  clone.querySelectorAll("a, button, input, select, textarea").forEach((control) => {
+    control.setAttribute("tabindex", "-1");
+  });
+  return clone;
+}
+
+function createItemDragPreview(items, originCard) {
+  const originRect = originCard.getBoundingClientRect();
+  const preview = element("div", {
+    className: `item-drag-preview${items.length > 1 ? " is-group" : ""}`,
+    attrs: { "aria-hidden": "true" },
+  });
+  preview.inert = true;
+  preview.style.width = `${originRect.width}px`;
+  preview.style.height = `${originRect.height}px`;
+  preview.style.setProperty("--drag-grab-x", `${itemDrag.pointerOffsetX}px`);
+  preview.style.setProperty("--drag-grab-y", `${itemDrag.pointerOffsetY}px`);
+  preview.style.setProperty("--drag-count-x", `${originRect.width - 18}px`);
+  preview.style.setProperty("--drag-count-y", "-15px");
+  const cluster = element("div", { className: "item-drag-preview-cluster" });
+  const stack = element("div", { className: "item-drag-preview-stack" });
+  const originItem = items.find((item) => item.key === originCard.dataset.itemKey) ?? items[0];
+  const previewItems = [
+    ...items.filter((item) => item.key !== originItem.key).slice(0, 3),
+    originItem,
+  ];
+  previewItems.forEach((item, index) => {
+    const depth = previewItems.length - index - 1;
+    const layer = element("div", {
+      className: "item-drag-preview-card",
+      attrs: { "aria-hidden": "true" },
+    });
+    layer.style.setProperty("--stack-depth", String(depth));
+    layer.style.setProperty("--stack-x", `${depth * 7}px`);
+    layer.style.setProperty("--stack-y", `${depth * -6}px`);
+    layer.style.setProperty(
+      "--stack-rotate",
+      `${depth === 0 ? 0 : (depth % 2 === 0 ? 0.75 : -0.75)}deg`,
+    );
+    layer.style.zIndex = String(index + 1);
+    const cardFront = cloneCardFrontForDrag(item);
+    if (cardFront) layer.append(cardFront);
+    stack.append(layer);
+  });
+  if (items.length > 1) {
+    cluster.append(element("span", {
+      className: "item-drag-preview-count",
+      text: formatCount(items.length),
+    }));
+  }
+
+  cluster.append(stack);
+  preview.append(cluster);
   document.body.append(preview);
+  itemDrag.previewWidth = originRect.width;
+  itemDrag.previewHeight = originRect.height;
   return preview;
+}
+
+function selectedItemsForDrag(originItemKey) {
+  const renderedKeys = Array.from(
+    refs["item-grid"].querySelectorAll(".item-card[data-item-key]:not([hidden])"),
+    (card) => card.dataset.itemKey,
+  );
+  const itemKeys = selectedItemKeys.has(originItemKey)
+    ? renderedKeys.filter((itemKey) => selectedItemKeys.has(itemKey))
+    : [originItemKey];
+  return itemKeys.map(findItem).filter(Boolean);
+}
+
+function gatherCardsForDrag(itemKeys, originCard) {
+  const originRect = originCard.getBoundingClientRect();
+  itemKeys.forEach((itemKey, index) => {
+    const card = findRenderedCard(itemKey);
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    const stackOffset = Math.min(index, 4) * 3;
+    card.style.setProperty("--drag-gather-x", `${originRect.left - rect.left + stackOffset}px`);
+    card.style.setProperty("--drag-gather-y", `${originRect.top - rect.top + stackOffset}px`);
+    card.style.setProperty("--drag-gather-rotate", `${(index - ((itemKeys.length - 1) / 2)) * 0.45}deg`);
+    card.classList.add("is-dragging");
+    card.classList.toggle("is-drag-origin", itemKey === originCard.dataset.itemKey);
+    card.setAttribute("aria-grabbed", "true");
+  });
 }
 
 function setFolderDropTarget(target) {
@@ -890,91 +1237,175 @@ function getFolderDropTarget(target) {
 }
 
 function finishItemDrag({ dropped = false } = {}) {
-  const draggedItemKey = itemDrag.itemKey;
+  const draggedItemKeys = [...itemDrag.itemKeys];
   const shouldCloseSidebar = itemDrag.openedSidebar;
-  if (draggedItemKey) {
-    const card = findRenderedCard(draggedItemKey);
-    card?.classList.remove("is-dragging");
-    card?.setAttribute("aria-grabbed", "false");
+  if (draggedItemKeys.length) {
+    for (const itemKey of draggedItemKeys) {
+      const card = findRenderedCard(itemKey);
+      card?.classList.remove("is-dragging", "is-drag-origin");
+      card?.style.removeProperty("--drag-gather-x");
+      card?.style.removeProperty("--drag-gather-y");
+      card?.style.removeProperty("--drag-gather-rotate");
+      card?.setAttribute("aria-grabbed", "false");
+    }
     itemDrag.suppressClickUntil = Date.now() + DRAG_CLICK_SUPPRESSION_MS;
+  }
+  itemDrag.preview?.remove();
+  if (itemDrag.pointerCard?.hasPointerCapture?.(itemDrag.pointerId)) {
+    itemDrag.pointerCard.releasePointerCapture(itemDrag.pointerId);
   }
   setFolderDropTarget(null);
   document.body.classList.remove("is-item-dragging");
-  refs["folder-drop-hint"].textContent = "카드를 폴더에 끌어 놓아 분류";
-  itemDrag.itemKey = null;
-  itemDrag.blockedByControl = false;
+  refs["folder-drop-hint"].textContent = t("카드를 폴더에 끌어 놓아 분류");
+  itemDrag.itemKeys = [];
+  itemDrag.originItemKey = null;
   itemDrag.openedSidebar = false;
+  itemDrag.pointerId = null;
+  itemDrag.pointerStartX = 0;
+  itemDrag.pointerStartY = 0;
+  itemDrag.pointerOffsetX = 0;
+  itemDrag.pointerOffsetY = 0;
+  itemDrag.pointerCard = null;
+  itemDrag.preview = null;
+  itemDrag.previewWidth = 0;
+  itemDrag.previewHeight = 0;
   if (shouldCloseSidebar) {
     window.setTimeout(closeSidebar, dropped ? 460 : 0);
   }
 }
 
-function startItemDrag(event) {
-  const card = event.target instanceof Element
-    ? event.target.closest(".item-card[data-item-key]")
-    : null;
-  if (!card || itemDrag.blockedByControl || card.classList.contains("is-flipped") || !event.dataTransfer) {
-    event.preventDefault();
-    return;
-  }
-
+function beginPointerItemDrag(event) {
+  const card = itemDrag.pointerCard;
+  if (!card || card.classList.contains("is-flipped")) return false;
   const item = findItem(card.dataset.itemKey);
-  if (!item) {
-    event.preventDefault();
-    return;
-  }
+  if (!item) return false;
 
   clearFolderDropSuccess();
-  itemDrag.itemKey = item.key;
+  const dragItems = selectedItemsForDrag(item.key);
+  const itemKeys = dragItems.map((candidate) => candidate.key);
+  itemDrag.itemKeys = itemKeys;
+  itemDrag.originItemKey = item.key;
   itemDrag.openedSidebar = false;
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData(ITEM_DRAG_MIME, item.key);
-  event.dataTransfer.setData("text/plain", item.title);
+  itemDrag.preview = createItemDragPreview(dragItems, card);
+  itemDrag.preview.classList.add("is-pointer-preview");
 
-  const preview = createItemDragPreview(item);
-  event.dataTransfer.setDragImage(preview, 22, 22);
-  window.setTimeout(() => preview.remove(), 0);
-
-  card.classList.add("is-dragging");
-  card.setAttribute("aria-grabbed", "true");
+  gatherCardsForDrag(itemKeys, card);
   document.body.classList.add("is-item-dragging");
-  refs["folder-drop-hint"].textContent = "놓을 폴더를 선택하세요";
+  refs["folder-drop-hint"].textContent = itemKeys.length > 1
+    ? t("{count}개 상품을 놓을 폴더를 선택하세요", { count: formatCount(itemKeys.length) })
+    : t("놓을 폴더를 선택하세요");
 
   if (window.matchMedia("(max-width: 980px)").matches
     && !document.body.classList.contains("sidebar-visible")) {
     itemDrag.openedSidebar = true;
     openSidebar();
   }
+  card.setPointerCapture?.(event.pointerId);
+  updatePointerDragPosition(event);
+  return true;
 }
 
-function handleFolderDragOver(event) {
-  if (!itemDrag.itemKey) return;
-  const target = getFolderDropTarget(event.target);
-  if (!target) {
-    setFolderDropTarget(null);
-    return;
+function updatePointerDragPosition(event) {
+  if (!itemDrag.preview) return;
+  const previewWidth = itemDrag.previewWidth || 280;
+  const previewHeight = itemDrag.previewHeight || 360;
+  const left = Math.min(
+    event.clientX - itemDrag.pointerOffsetX,
+    Math.max(8, window.innerWidth - previewWidth - 24),
+  );
+  const top = Math.min(
+    event.clientY - itemDrag.pointerOffsetY,
+    Math.max(18, window.innerHeight - previewHeight - 18),
+  );
+  const previewLeft = Math.max(8, left);
+  const previewTop = Math.max(18, top);
+  itemDrag.preview.style.transform = `translate3d(${previewLeft}px, ${previewTop}px, 0)`;
+
+  const sidebarRect = refs.sidebar.getBoundingClientRect();
+  const verticallyTouchesSidebar = previewTop <= sidebarRect.bottom
+    && previewTop + previewHeight >= sidebarRect.top;
+  const horizontalOverlap = verticallyTouchesSidebar
+    ? Math.max(
+      0,
+      Math.min(previewLeft + previewWidth, sidebarRect.right)
+        - Math.max(previewLeft, sidebarRect.left),
+    )
+    : 0;
+  itemDrag.preview.classList.toggle("is-over-sidebar", horizontalOverlap > 0);
+
+  const pointerTarget = document.elementFromPoint(event.clientX, event.clientY);
+  setFolderDropTarget(getFolderDropTarget(pointerTarget));
+}
+
+function handleItemPointerDown(event) {
+  if (event.button !== 0 || event.isPrimary === false || isInteractiveDragOrigin(event.target)) return;
+  const card = event.target instanceof Element
+    ? event.target.closest(".item-card[data-item-key]")
+    : null;
+  if (!card || card.classList.contains("is-flipped")) return;
+  itemDrag.pointerId = event.pointerId;
+  itemDrag.pointerStartX = event.clientX;
+  itemDrag.pointerStartY = event.clientY;
+  const cardRect = card.getBoundingClientRect();
+  itemDrag.pointerOffsetX = event.clientX - cardRect.left;
+  itemDrag.pointerOffsetY = event.clientY - cardRect.top;
+  itemDrag.pointerCard = card;
+}
+
+function handleItemPointerMove(event) {
+  if (event.pointerId !== itemDrag.pointerId || !itemDrag.pointerCard) return;
+  if (!itemDrag.itemKeys.length) {
+    const distance = Math.hypot(
+      event.clientX - itemDrag.pointerStartX,
+      event.clientY - itemDrag.pointerStartY,
+    );
+    if (distance < POINTER_DRAG_THRESHOLD_PX) return;
+    if (!beginPointerItemDrag(event)) {
+      finishItemDrag();
+      return;
+    }
   }
   event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-  setFolderDropTarget(target);
+  updatePointerDragPosition(event);
 }
 
-async function handleFolderDrop(event) {
-  const target = getFolderDropTarget(event.target);
-  const transferredItemKey = event.dataTransfer?.getData(ITEM_DRAG_MIME);
-  const itemKey = itemDrag.itemKey || transferredItemKey;
-  if (!target || !itemKey) return;
+function handleItemPointerUp(event) {
+  if (event.pointerId !== itemDrag.pointerId) return;
+  if (!itemDrag.itemKeys.length) {
+    itemDrag.pointerId = null;
+    itemDrag.pointerStartX = 0;
+    itemDrag.pointerStartY = 0;
+    itemDrag.pointerOffsetX = 0;
+    itemDrag.pointerOffsetY = 0;
+    itemDrag.pointerCard = null;
+    return;
+  }
 
   event.preventDefault();
   event.stopPropagation();
+  updatePointerDragPosition(event);
+  const target = itemDrag.target;
+  const itemKeys = [...itemDrag.itemKeys];
+  if (!target) {
+    finishItemDrag();
+    return;
+  }
   const folderId = target.dataset.dropFolderId || null;
+  const draggedCurrentSelection = itemKeys.some((itemKey) => selectedItemKeys.has(itemKey));
   finishItemDrag({ dropped: true });
 
-  try {
-    await updateItemFolderAssignment(itemKey, folderId, { fromDrop: true });
-  } catch (error) {
-    showToast(`상품을 옮기지 못했어요: ${error.message}`, "error");
-  }
+  void updateItemsFolderAssignment(itemKeys, folderId, {
+    fromDrop: true,
+    clearSelection: draggedCurrentSelection,
+  })
+    .catch((error) => {
+      showToast(t("상품을 옮기지 못했어요: {message}", { message: error.message }), "error");
+    });
+}
+
+function handleItemPointerCancel(event) {
+  if (event.pointerId !== itemDrag.pointerId) return;
+  finishItemDrag();
 }
 
 function updateRenderedDownloadBack(itemKey) {
@@ -990,7 +1421,7 @@ function setCardFlipped(card, flipped, { moveFocus = false } = {}) {
   const front = card.querySelector(".item-card-front");
   const back = card.querySelector(".item-card-back");
   card.classList.toggle("is-flipped", flipped);
-  card.draggable = !flipped;
+  card.draggable = false;
   front?.setAttribute("aria-hidden", String(flipped));
   back?.setAttribute("aria-hidden", String(!flipped));
   if (front) front.inert = flipped;
@@ -1039,7 +1470,7 @@ async function revealDownloadOptions(itemKey, trigger) {
     } else {
       const permissionGranted = await requestBoothAccess();
       if (!permissionGranted) {
-        const error = new Error("다운로드 목록을 읽으려면 BOOTH 계정 페이지 접근을 허용해 주세요.");
+        const error = new Error(t("다운로드 목록을 읽으려면 BOOTH 계정 페이지 접근을 허용해 주세요."));
         error.code = "PERMISSION_REQUIRED";
         throw error;
       }
@@ -1052,7 +1483,7 @@ async function revealDownloadOptions(itemKey, trigger) {
   } catch (error) {
     if (downloadCardStates.get(itemKey) !== downloadState) return;
     downloadState.status = "error";
-    downloadState.error = error.message || "잠시 후 다시 시도해 주세요.";
+    downloadState.error = error.message || t("잠시 후 다시 시도해 주세요.");
     downloadState.authRequired = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
   }
 
@@ -1077,22 +1508,22 @@ async function startDownload(button) {
   const arrow = button.querySelector(".download-option-arrow");
   button.disabled = true;
   button.classList.add("is-starting");
-  if (arrow) arrow.textContent = "…";
+  setLucideIcon(arrow, "loader-circle");
 
   try {
     if (IS_DEMO) {
       await new Promise((resolve) => window.setTimeout(resolve, 280));
-      showToast("미리보기에서는 실제 파일을 다운로드하지 않아요.");
+      showToast(t("미리보기에서는 실제 파일을 다운로드하지 않아요."));
     } else {
       startBoothDownload(option.url);
-      showToast(`${option.label} 다운로드를 시작했어요.`);
+      showToast(t("{file} 다운로드를 시작했어요.", { file: option.label }));
     }
   } catch (error) {
-    showToast(`다운로드를 시작하지 못했어요: ${error.message}`, "error");
+    showToast(t("다운로드를 시작하지 못했어요: {message}", { message: error.message }), "error");
   } finally {
     button.disabled = false;
     button.classList.remove("is-starting");
-    if (arrow) arrow.textContent = "↓";
+    setLucideIcon(arrow, "download");
   }
 }
 
@@ -1119,36 +1550,6 @@ function hasActiveFilter() {
     || ui.sort.name !== "off";
 }
 
-function renderSearchSuggestions() {
-  const suggestions = suggestAvatarSearchTerms(ui.query, state.items, {
-    searchField: ui.searchField,
-  });
-  const container = refs["search-suggestions"];
-  container.hidden = suggestions.length === 0;
-
-  if (!suggestions.length) {
-    container.replaceChildren();
-    return;
-  }
-
-  const list = element("span", { className: "search-suggestion-list" });
-  for (const suggestion of suggestions) {
-    list.append(element("button", {
-      className: "search-suggestion-button",
-      text: suggestion,
-      attrs: {
-        type: "button",
-        "data-search-suggestion": suggestion,
-        "aria-label": `${suggestion}(으)로 검색`,
-      },
-    }));
-  }
-  container.replaceChildren(
-    element("span", { className: "search-suggestion-prompt", text: "이것을 찾으셨나요?" }),
-    list,
-  );
-}
-
 function prefersReducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
@@ -1169,10 +1570,31 @@ function settleCardAnimations(card) {
   return rect;
 }
 
+function clearInitialEntryAnimation(card) {
+  if (!card.classList.contains("is-initial-entry")) return;
+  card.classList.remove("is-initial-entry");
+}
+
+function playInitialEntryAnimation(card) {
+  card.classList.add("is-initial-entry");
+  const handleAnimationEnd = (event) => {
+    if (event.target !== card || event.animationName !== "cardReveal") return;
+    card.removeEventListener("animationend", handleAnimationEnd);
+    clearInitialEntryAnimation(card);
+  };
+  card.addEventListener("animationend", handleAnimationEnd);
+
+  const cardIndex = Number.parseInt(card.style.getPropertyValue("--card-index"), 10) || 0;
+  window.setTimeout(() => {
+    card.removeEventListener("animationend", handleAnimationEnd);
+    clearInitialEntryAnimation(card);
+  }, 520 + (Math.min(cardIndex, 12) * 24));
+}
+
 function replaceCards(visible) {
   const cards = visible.map(createCard);
   if (!hasShownCards && cards.length) {
-    cards.forEach((card) => card.classList.add("is-initial-entry"));
+    cards.forEach(playInitialEntryAnimation);
     hasShownCards = true;
   }
   refs["item-grid"].replaceChildren(...cards);
@@ -1195,6 +1617,7 @@ function reconcileCards(visible, { animateLayout = false } = {}) {
 
   const desiredCards = visible.map((item, index) => {
     const card = existingByKey.get(item.key) ?? createCard(item, index);
+    updateCardSearchMatch(card, item);
     card.hidden = false;
     card.style.setProperty("--card-index", String(Math.min(index, 12)));
     grid.append(card);
@@ -1244,31 +1667,33 @@ function reconcileCards(visible, { animateLayout = false } = {}) {
 function renderItems({ reconcile = false, animateLayout = false } = {}) {
   const results = currentResults();
   const visible = results.slice(0, ui.visibleLimit);
+  pruneItemSelection(new Set(visible.map((item) => item.key)));
   const noStoredItems = state.items.length === 0;
   const noResults = !noStoredItems && results.length === 0;
 
   if (visible.length) refs["item-grid"].hidden = false;
   if (reconcile) reconcileCards(visible, { animateLayout });
   else replaceCards(visible);
+  syncSelectionUI();
 
   refs["result-summary"].replaceChildren(
     element("strong", { text: formatCount(results.length) }),
-    document.createTextNode("개의 상품"),
+    document.createTextNode(t("개의 상품")),
   );
   refs["clear-filter"].hidden = !hasActiveFilter();
-  refs["load-more-wrap"].hidden = results.length <= visible.length;
+  refs["load-more-sentinel"].hidden = results.length <= visible.length;
 
   refs["empty-state"].hidden = !(noStoredItems || noResults);
   refs["item-grid"].hidden = noStoredItems || noResults;
 
   if (noStoredItems) {
-    refs["empty-title"].textContent = "라이브러리를 불러와 주세요";
-    refs["empty-description"].textContent = "BOOTH에 로그인한 뒤 전체 동기화를 누르면 구매 상품과 기프트를 읽어옵니다.";
+    refs["empty-title"].textContent = t("라이브러리를 불러와 주세요");
+    refs["empty-description"].textContent = t("BOOTH에 로그인한 뒤 전체 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.");
     refs["empty-sync-button"].hidden = false;
     refs["empty-login-link"].hidden = false;
   } else if (noResults) {
-    refs["empty-title"].textContent = "조건에 맞는 상품이 없어요";
-    refs["empty-description"].textContent = "검색어나 필터를 바꾸면 다른 상품을 찾을 수 있어요.";
+    refs["empty-title"].textContent = t("조건에 맞는 상품이 없어요");
+    refs["empty-description"].textContent = t("검색어나 필터를 바꾸면 다른 상품을 찾을 수 있어요.");
     refs["empty-sync-button"].hidden = true;
     refs["empty-login-link"].hidden = true;
   }
@@ -1279,7 +1704,7 @@ function renderHeader() {
   refs["view-eyebrow"].textContent = copy.eyebrow;
   refs["view-title"].textContent = copy.title;
   refs["view-description"].textContent = copy.description;
-  refs["last-sync"].textContent = IS_DEMO ? "미리보기 데이터" : formatSyncTime(state.lastSyncedAt);
+  refs["last-sync"].textContent = IS_DEMO ? t("미리보기 데이터") : formatSyncTime(state.lastSyncedAt);
   refs["purchase-sort-select"].value = ui.sort.purchase;
   refs["name-sort-select"].value = ui.sort.name;
   document.querySelector("[data-sort-control='purchase']")
@@ -1288,7 +1713,6 @@ function renderHeader() {
     ?.classList.toggle("is-off", ui.sort.name === "off");
   refs["search-field"].value = ui.searchField;
   if (refs["search-input"].value !== ui.query) refs["search-input"].value = ui.query;
-  renderSearchSuggestions();
 }
 
 function render({ reconcileItems = false, animateItems = false } = {}) {
@@ -1305,7 +1729,34 @@ function scheduleResultRender() {
   }, 90);
 }
 
+function loadNextResultPage() {
+  const results = currentResults();
+  if (ui.visibleLimit >= results.length) return;
+  ui.visibleLimit = Math.min(results.length, ui.visibleLimit + PAGE_SIZE);
+  renderItems({ reconcile: true, animateLayout: true });
+}
+
+function bindInfiniteScroll() {
+  if ("IntersectionObserver" in window) {
+    loadMoreObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadNextResultPage();
+    }, {
+      rootMargin: "360px 0px",
+    });
+    loadMoreObserver.observe(refs["load-more-sentinel"]);
+    return;
+  }
+
+  window.addEventListener("scroll", () => {
+    const sentinel = refs["load-more-sentinel"];
+    if (!sentinel.hidden && sentinel.getBoundingClientRect().top < window.innerHeight + 360) {
+      loadNextResultPage();
+    }
+  }, { passive: true });
+}
+
 function setSource(source) {
+  selectedItemKeys.clear();
   ui.source = source;
   ui.favoritesOnly = false;
   ui.folderId = "all";
@@ -1316,6 +1767,7 @@ function setSource(source) {
 }
 
 function selectFolder(folderId) {
+  selectedItemKeys.clear();
   ui.folderId = folderId;
   ui.selectedFolderId = folderId === "all" || folderId === "unfiled" ? null : folderId;
   ui.favoritesOnly = false;
@@ -1325,6 +1777,7 @@ function selectFolder(folderId) {
 }
 
 function clearFilters() {
+  selectedItemKeys.clear();
   Object.assign(ui, {
     source: "all",
     folderId: "all",
@@ -1346,25 +1799,9 @@ function clearFilters() {
 }
 
 function setSortMode(kind, mode) {
-  if (!["purchase", "name"].includes(kind) || !["off", "asc", "desc"].includes(mode)) return;
-  const otherKind = kind === "purchase" ? "name" : "purchase";
-
-  if (mode === "off") {
-    ui.sort = {
-      ...ui.sort,
-      [kind]: "off",
-      [otherKind]: ui.lastSortDirection[otherKind] || "asc",
-    };
-  } else {
-    ui.lastSortDirection = {
-      ...ui.lastSortDirection,
-      [kind]: mode,
-    };
-    ui.sort = {
-      purchase: kind === "purchase" ? mode : "off",
-      name: kind === "name" ? mode : "off",
-    };
-  }
+  const next = updateSortMode(ui.sort, ui.lastSortDirection, kind, mode);
+  ui.sort = next.sort;
+  ui.lastSortDirection = next.lastSortDirection;
 
   resetResultWindow();
   renderHeader();
@@ -1382,6 +1819,7 @@ function setSyncPanel({ message, detail = "", percent = 0, tone = "default", log
 
 function mergeSyncedItems(items, syncedAt) {
   downloadCardStates.clear();
+  selectedItemKeys.clear();
   const keys = new Set(items.map((item) => item.key));
   state = {
     ...state,
@@ -1398,10 +1836,11 @@ function mergeSyncedItems(items, syncedAt) {
 
 async function runDemoSync() {
   const phases = [
-    [18, "구매 목록 확인 중"],
-    [46, "라이브러리 페이지 읽는 중"],
-    [72, "기프트함 읽는 중"],
-    [100, "미리보기 데이터를 불러왔어요"],
+    [16, t("구매 목록 확인 중")],
+    [42, t("라이브러리 페이지 읽는 중")],
+    [67, t("기프트함 읽는 중")],
+    [86, t("무료 다운로드함 읽는 중")],
+    [100, t("미리보기 데이터를 불러왔어요")],
   ];
   for (const [percent, message] of phases) {
     setSyncPanel({ message, detail: `${percent}%`, percent });
@@ -1412,7 +1851,7 @@ async function runDemoSync() {
 async function syncLibrary() {
   if (ui.syncing) return;
   if (ui.calculatingSpending) {
-    showToast("빨간약 계산이 끝난 뒤 동기화해 주세요.", "error");
+    showToast(t("빨간약 계산이 끝난 뒤 동기화해 주세요."), "error");
     return;
   }
   ui.syncing = true;
@@ -1420,13 +1859,17 @@ async function syncLibrary() {
   refs["red-pill-button"].disabled = true;
   refs["clear-local-data"].disabled = true;
   refs["sync-button"].classList.add("is-syncing");
-  setSyncPanel({ message: "라이브러리 연결 중", detail: "BOOTH 로그인 상태를 확인하고 있어요.", percent: 5 });
+  setSyncPanel({
+    message: t("라이브러리 연결 중"),
+    detail: t("BOOTH 로그인 상태를 확인하고 있어요."),
+    percent: 5,
+  });
 
   try {
     if (!IS_DEMO) {
       const permissionGranted = await requestBoothAccess();
       if (!permissionGranted) {
-        const error = new Error("라이브러리를 읽으려면 BOOTH 계정 페이지 접근을 허용해 주세요.");
+        const error = new Error(t("라이브러리를 읽으려면 BOOTH 계정 페이지 접근을 허용해 주세요."));
         error.code = "PERMISSION_REQUIRED";
         throw error;
       }
@@ -1435,26 +1878,33 @@ async function syncLibrary() {
     await runWithStateLock(async () => {
       if (IS_DEMO) {
         await runDemoSync();
-        showToast("미리보기 동기화를 완료했어요.");
+        showToast(t("미리보기 동기화를 완료했어요."));
         return;
       }
 
       const result = await syncBoothLibrary(({ message, completed, total }) => {
         const percent = total ? Math.round((completed / total) * 100) : 8;
-        setSyncPanel({ message, detail: total ? `${completed} / ${total} 페이지` : "", percent });
+        setSyncPanel({
+          message,
+          detail: total ? t("{completed} / {total} 페이지", { completed, total }) : "",
+          percent,
+        });
       });
       mergeSyncedItems(result.items, result.syncedAt);
       await persistState({ alreadyLocked: true });
       resetResultWindow();
       render();
       setSyncPanel({
-        message: "동기화가 끝났어요",
-        detail: `${formatCount(result.items.length)}개 상품을 이 기기에 저장했습니다.`,
+        message: t("동기화가 끝났어요"),
+        detail: t("{items}개 상품과 {files}개 다운로드 파일명을 이 기기에 저장했습니다.", {
+          items: formatCount(result.items.length),
+          files: formatCount(result.downloadFileCount),
+        }),
         percent: 100,
         tone: "success",
       });
       window.setTimeout(() => setSyncPanel({ hidden: true }), 4200);
-      showToast("라이브러리를 최신 상태로 업데이트했어요.");
+      showToast(t("라이브러리를 최신 상태로 업데이트했어요."));
     });
   } catch (error) {
     const authError = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
@@ -1462,19 +1912,19 @@ async function syncLibrary() {
     const permissionError = error?.code === "PERMISSION_REQUIRED";
     setSyncPanel({
       message: authError
-        ? "BOOTH 로그인이 필요해요"
+        ? t("BOOTH 로그인이 필요해요")
         : permissionError
-          ? "BOOTH 접근 권한이 필요해요"
+          ? t("BOOTH 접근 권한이 필요해요")
         : busyError
-          ? "다른 창에서 작업 중이에요"
-          : "동기화하지 못했어요",
+          ? t("다른 창에서 작업 중이에요")
+          : t("동기화하지 못했어요"),
       detail: authError
-        ? "같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요."
+        ? t("같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요.")
         : permissionError
-          ? "전체 동기화를 다시 누르고 계정 페이지 읽기 권한을 허용해 주세요."
+          ? t("전체 동기화를 다시 누르고 계정 페이지 읽기 권한을 허용해 주세요.")
         : busyError
-          ? "진행 중인 작업이 끝난 뒤 다시 시도해 주세요."
-          : (error.message || "잠시 후 다시 시도해 주세요."),
+          ? t("진행 중인 작업이 끝난 뒤 다시 시도해 주세요.")
+          : (error.message || t("잠시 후 다시 시도해 주세요.")),
       percent: 100,
       tone: busyError || permissionError ? "default" : "error",
       login: authError,
@@ -1490,7 +1940,7 @@ async function syncLibrary() {
 
 function openDataDeleteConfirmation() {
   if (ui.syncing || ui.calculatingSpending) {
-    showToast("진행 중인 작업이 끝난 뒤 데이터를 삭제해 주세요.", "error");
+    showToast(t("진행 중인 작업이 끝난 뒤 데이터를 삭제해 주세요."), "error");
     return;
   }
   refs["data-delete-dialog"].showModal();
@@ -1509,16 +1959,16 @@ async function confirmDataDelete(event) {
     });
     preferences = await loadPreferences();
     spendingSummary = await loadSpendingSummary();
-    applyTheme(preferences.theme);
+    applyLocalePreference(preferences.locale);
     downloadCardStates.clear();
     refs["data-delete-dialog"].close();
     setSyncPanel({ hidden: true });
     clearFilters();
-    showToast("이 기기에 저장된 BOOTH Shelf 데이터를 모두 삭제했어요.");
+    showToast(t("이 기기에 저장된 BOOTH Shelf 데이터를 모두 삭제했어요."));
   } catch (error) {
     showToast(error?.code === "STATE_BUSY"
-      ? "다른 창의 작업이 끝난 뒤 다시 시도해 주세요."
-      : `데이터를 삭제하지 못했어요: ${error.message}`, "error");
+      ? t("다른 창의 작업이 끝난 뒤 다시 시도해 주세요.")
+      : t("데이터를 삭제하지 못했어요: {message}", { message: error.message }), "error");
   } finally {
     submitButton.disabled = false;
   }
@@ -1529,7 +1979,7 @@ function populateParentSelect(mode) {
   const select = refs["folder-parent-select"];
   select.replaceChildren();
 
-  const options = [{ id: "", label: "최상위" }];
+  const options = [{ id: "", label: t("최상위") }];
   for (const folder of state.folders) {
     const path = getFolderPath(state.folders, folder.id);
     const allowed = mode === "move"
@@ -1558,11 +2008,11 @@ function openFolderDialog(mode) {
   refs["folder-name-input"].required = !isMove;
   refs["folder-name-input"].value = isRename ? selected?.name || "" : "";
   refs["folder-dialog-title"].textContent = isMove
-    ? "폴더 이동"
+    ? t("폴더 이동")
     : isRename
-      ? "폴더 이름 변경"
-      : "새 폴더";
-  refs["folder-submit"].textContent = isMove ? "이동" : "저장";
+      ? t("폴더 이름 변경")
+      : t("새 폴더");
+  refs["folder-submit"].textContent = t(isMove ? "이동" : "저장");
 
   if (isMove) {
     populateParentSelect(mode);
@@ -1595,7 +2045,7 @@ async function submitFolderForm(event) {
     await persistState();
     refs["folder-dialog"].close();
     render();
-    showToast(mode === "move" ? "폴더를 이동했어요." : "폴더를 저장했어요.");
+    showToast(t(mode === "move" ? "폴더를 이동했어요." : "폴더를 저장했어요."));
   } catch (error) {
     refs["folder-form-error"].textContent = error.message;
   }
@@ -1607,7 +2057,7 @@ function openAssignDialog(itemKey) {
   ui.assigningItemKey = itemKey;
   refs["assign-item-name"].textContent = item.title;
   refs["assign-folder-select"].replaceChildren(
-    element("option", { text: "미분류", attrs: { value: "" } }),
+    element("option", { text: t("미분류"), attrs: { value: "" } }),
   );
 
   const orderedFolders = state.folders
@@ -1628,21 +2078,62 @@ function openAssignDialog(itemKey) {
   refs["assign-dialog"].showModal();
 }
 
+async function updateItemsFolderAssignment(
+  itemKeys,
+  folderId,
+  { fromDrop = false, clearSelection = true } = {},
+) {
+  const uniqueKeys = [...new Set(itemKeys)];
+  const normalizedFolderId = folderId || null;
+  const folderPath = normalizedFolderId ? getFolderPath(state.folders, normalizedFolderId) : [];
+  const folderLabel = normalizedFolderId
+    ? folderPath.map((folder) => folder.name).join(" / ")
+    : t("미분류");
+  const changedCount = uniqueKeys.filter(
+    (itemKey) => (state.assignments[itemKey] || null) !== normalizedFolderId,
+  ).length;
+
+  state.assignments = setItemsFolderAssignment(
+    state.items,
+    state.folders,
+    state.assignments,
+    uniqueKeys,
+    normalizedFolderId,
+  );
+  await persistState();
+  if (fromDrop) markFolderDropSuccess(normalizedFolderId);
+  if (clearSelection) selectedItemKeys.clear();
+  render();
+
+  if (!changedCount) {
+    showToast(t("선택한 상품이 이미 {folder}에 들어 있어요.", { folder: folderLabel }));
+    return false;
+  }
+
+  showToast(normalizedFolderId
+    ? t("{count}개 상품을 {folder} 폴더로 옮겼어요.", {
+      count: formatCount(changedCount),
+      folder: folderLabel,
+    })
+    : t("{count}개 상품을 미분류로 옮겼어요.", { count: formatCount(changedCount) }));
+  return true;
+}
+
 async function updateItemFolderAssignment(itemKey, folderId, { fromDrop = false } = {}) {
   const item = findItem(itemKey);
-  if (!item) throw new Error("상품을 찾을 수 없어요.");
+  if (!item) throw new Error(t("상품을 찾을 수 없어요."));
 
   const normalizedFolderId = folderId || null;
   const previousFolderId = state.assignments[itemKey] || null;
   const folderPath = normalizedFolderId ? getFolderPath(state.folders, normalizedFolderId) : [];
   const folderLabel = normalizedFolderId
     ? folderPath.map((folder) => folder.name).join(" / ")
-    : "미분류";
+    : t("미분류");
 
   if (previousFolderId === normalizedFolderId) {
     if (fromDrop) markFolderDropSuccess(normalizedFolderId);
     render();
-    showToast(`이미 ${folderLabel}에 들어 있어요.`);
+    showToast(t("이미 {folder}에 들어 있어요.", { folder: folderLabel }));
     return false;
   }
 
@@ -1657,8 +2148,8 @@ async function updateItemFolderAssignment(itemKey, folderId, { fromDrop = false 
   if (fromDrop) markFolderDropSuccess(normalizedFolderId);
   render();
   showToast(normalizedFolderId
-    ? `${folderLabel} 폴더로 옮겼어요.`
-    : "상품을 미분류로 옮겼어요.");
+    ? t("{folder} 폴더로 옮겼어요.", { folder: folderLabel })
+    : t("상품을 미분류로 옮겼어요."));
   return true;
 }
 
@@ -1669,7 +2160,7 @@ async function submitAssignment(event) {
     await updateItemFolderAssignment(ui.assigningItemKey, folderId);
     refs["assign-dialog"].close();
   } catch (error) {
-    showToast(`상품을 옮기지 못했어요: ${error.message}`, "error");
+    showToast(t("상품을 옮기지 못했어요: {message}", { message: error.message }), "error");
   }
 }
 
@@ -1678,8 +2169,13 @@ function openDeleteConfirmation() {
   if (!selected) return;
   const childCount = state.folders.filter((folder) => folder.parentId === selected.id).length;
   refs["confirm-copy"].textContent = childCount
-    ? `“${selected.name}” 폴더를 삭제합니다. 하위 폴더 ${childCount}개와 이 폴더의 상품은 한 단계 위로 이동해요.`
-    : `“${selected.name}” 폴더를 삭제합니다. 이 폴더의 상품은 한 단계 위로 이동해요.`;
+    ? t("“{name}” 폴더를 삭제합니다. 하위 폴더 {count}개와 이 폴더의 상품은 한 단계 위로 이동해요.", {
+      name: selected.name,
+      count: childCount,
+    })
+    : t("“{name}” 폴더를 삭제합니다. 이 폴더의 상품은 한 단계 위로 이동해요.", {
+      name: selected.name,
+    });
   refs["confirm-dialog"].showModal();
 }
 
@@ -1696,7 +2192,7 @@ async function confirmDelete(event) {
   await persistState();
   refs["confirm-dialog"].close();
   render();
-  showToast("폴더를 삭제했어요.");
+  showToast(t("폴더를 삭제했어요."));
 }
 
 async function toggleFavorite(itemKey) {
@@ -1711,6 +2207,9 @@ async function toggleFavorite(itemKey) {
 
 function bindEvents() {
   refs["theme-toggle"].addEventListener("click", toggleTheme);
+  refs["language-toggle"].addEventListener("click", () => {
+    void cycleLocale();
+  });
   refs["red-pill-button"].addEventListener("click", openRedPillDialog);
   refs["red-pill-calculate"].addEventListener("click", calculateSpending);
   refs["sidebar-open"].addEventListener("click", openSidebar);
@@ -1737,21 +2236,10 @@ function bindEvents() {
     if (button) selectFolder(button.dataset.folderId);
   });
 
-  refs["item-grid"].addEventListener("pointerdown", (event) => {
-    itemDrag.blockedByControl = isInteractiveDragOrigin(event.target);
-  });
-  refs["item-grid"].addEventListener("pointerup", () => {
-    if (!itemDrag.itemKey) itemDrag.blockedByControl = false;
-  });
-  refs["item-grid"].addEventListener("pointercancel", () => {
-    if (!itemDrag.itemKey) itemDrag.blockedByControl = false;
-  });
-  refs["item-grid"].addEventListener("dragstart", startItemDrag);
-  refs["item-grid"].addEventListener("dragend", () => finishItemDrag());
-  refs.sidebar.addEventListener("dragover", handleFolderDragOver);
-  refs.sidebar.addEventListener("drop", (event) => {
-    void handleFolderDrop(event);
-  });
+  refs["item-grid"].addEventListener("pointerdown", handleItemPointerDown);
+  document.addEventListener("pointermove", handleItemPointerMove, { passive: false });
+  document.addEventListener("pointerup", handleItemPointerUp);
+  document.addEventListener("pointercancel", handleItemPointerCancel);
 
   refs["add-root-folder"].addEventListener("click", () => openFolderDialog("add-root"));
   refs["add-child-folder"].addEventListener("click", () => openFolderDialog("add-child"));
@@ -1763,13 +2251,11 @@ function bindEvents() {
   refs["search-input"].addEventListener("input", (event) => {
     ui.query = event.target.value;
     resetResultWindow();
-    renderSearchSuggestions();
     scheduleResultRender();
   });
   refs["search-field"].addEventListener("change", (event) => {
     ui.searchField = event.target.value;
     resetResultWindow();
-    renderSearchSuggestions();
     renderItems({ reconcile: true, animateLayout: true });
   });
   refs["purchase-sort-select"].addEventListener("change", (event) => {
@@ -1778,31 +2264,17 @@ function bindEvents() {
   refs["name-sort-select"].addEventListener("change", (event) => {
     setSortMode("name", event.target.value);
   });
-  refs["search-suggestions"].addEventListener("click", (event) => {
-    const button = event.target.closest("[data-search-suggestion]");
-    if (!button) return;
-    ui.query = button.dataset.searchSuggestion;
-    refs["search-input"].value = ui.query;
-    resetResultWindow();
-    renderSearchSuggestions();
-    renderItems({ reconcile: true, animateLayout: true });
-    refs["search-input"].focus();
-  });
-
   refs["sync-button"].addEventListener("click", syncLibrary);
   refs["empty-sync-button"].addEventListener("click", syncLibrary);
   refs["clear-filter"].addEventListener("click", clearFilters);
-  refs["load-more"].addEventListener("click", () => {
-    ui.visibleLimit += PAGE_SIZE;
-    renderItems({ reconcile: true, animateLayout: true });
-  });
-
+  refs["selection-clear"].addEventListener("click", clearItemSelection);
   refs["item-grid"].addEventListener("click", (event) => {
     if (Date.now() < itemDrag.suppressClickUntil) {
       event.preventDefault();
       event.stopPropagation();
       return;
     }
+    const card = event.target.closest(".item-card[data-item-key]");
     const downloadOption = event.target.closest("[data-download-option-index]");
     if (downloadOption) {
       startDownload(downloadOption);
@@ -1829,7 +2301,13 @@ function bindEvents() {
       return;
     }
     const assignButton = event.target.closest("[data-assign-key]");
-    if (assignButton) openAssignDialog(assignButton.dataset.assignKey);
+    if (assignButton) {
+      openAssignDialog(assignButton.dataset.assignKey);
+      return;
+    }
+    if (card && !card.classList.contains("is-flipped") && !isInteractiveDragOrigin(event.target)) {
+      toggleItemSelection(card.dataset.itemKey);
+    }
   });
 
   refs["folder-form"].addEventListener("submit", submitFolderForm);
@@ -1848,7 +2326,9 @@ function bindEvents() {
       event.preventDefault();
       refs["search-input"].focus();
     }
-    if (event.key === "Escape") closeSidebar();
+    if (event.key === "Escape") {
+      if (!clearItemSelection()) closeSidebar();
+    }
   });
 }
 
@@ -1861,12 +2341,14 @@ function bindStorageChanges() {
       if (Object.hasOwn(changes, STORAGE_KEY)) {
         state = await loadState();
         downloadCardStates.clear();
+        selectedItemKeys.clear();
         resetResultWindow();
         render();
       }
       if (Object.hasOwn(changes, PREFERENCES_KEY)) {
         preferences = await loadPreferences();
-        applyTheme(preferences.theme);
+        applyLocalePreference(preferences.locale);
+        render();
       }
       if (Object.hasOwn(changes, SPENDING_SUMMARY_KEY)) {
         spendingSummary = await loadSpendingSummary();
@@ -1875,7 +2357,9 @@ function bindStorageChanges() {
         }
       }
     } catch (error) {
-      showToast(`다른 창의 변경사항을 불러오지 못했어요: ${error.message}`, "error");
+      showToast(t("다른 창의 변경사항을 불러오지 못했어요: {message}", {
+        message: error.message,
+      }), "error");
     }
   });
 }
@@ -1894,15 +2378,16 @@ async function init() {
       loadSpendingSummary(),
     ]);
   }
-  applyTheme(preferences.theme);
+  applyLocalePreference(preferences.locale);
   bindEvents();
+  bindInfiniteScroll();
   bindStorageChanges();
   render();
 }
 
 init().catch((error) => {
   refs["empty-state"].hidden = false;
-  refs["empty-title"].textContent = "화면을 시작하지 못했어요";
-  refs["empty-description"].textContent = error.message || "확장프로그램을 다시 열어 주세요.";
+  refs["empty-title"].textContent = t("화면을 시작하지 못했어요");
+  refs["empty-description"].textContent = error.message || t("확장프로그램을 다시 열어 주세요.");
   refs["empty-sync-button"].hidden = true;
 });

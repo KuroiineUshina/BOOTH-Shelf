@@ -2,6 +2,7 @@
 // terms는 실제 상품명에서 찾을 공식 표기, aliases는 사용자가 입력할 수 있는 표기입니다.
 export const AVATAR_SEARCH_ALIASES = Object.freeze([
   { terms: ["ミルティナ", "Milltina"], aliases: ["miltina", "mirutina", "밀티나", "미루티나"] },
+  { terms: ["海咲", "Misaki", "ミサキ", "みさき"], aliases: ["misaki", "미사키"] },
   { terms: ["ルルネ", "rurune"], aliases: ["lulune", "루루네", "룰루네", "르루네"] },
   { terms: ["しなの", "Shinano"], aliases: ["시나노"] },
   { terms: ["マヌカ", "Manuka"], aliases: ["마누카"] },

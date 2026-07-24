@@ -10,7 +10,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.0.3");
+  assert.equal(manifest.version, "1.0.4");
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.version_name, manifest.version);
   assert.deepEqual(manifest.permissions, ["storage"]);
@@ -30,8 +30,23 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     "styles.css",
     "src/app.js",
     "src/avatar-aliases.js",
+    "src/i18n.js",
     "src/search.js",
     "src/urls.js",
+    "assets/lucide/lucide.woff2",
+    "assets/lucide/LICENSE",
+    "assets/kofi/kofi-cup.png",
+    "assets/paperlogy/Paperlogy-4Regular.ttf",
+    "assets/paperlogy/Paperlogy-5Medium.ttf",
+    "assets/paperlogy/Paperlogy-6SemiBold.ttf",
+    "assets/paperlogy/Paperlogy-7Bold.ttf",
+    "assets/paperlogy/Paperlogy-8ExtraBold.ttf",
+    "assets/paperlogy/OFL.txt",
+    "assets/paperlogy/SOURCE.md",
+    "assets/m-plus-1/MPLUS1-Variable.woff2",
+    "assets/m-plus-1/OFL.txt",
+    "assets/m-plus-1/SOURCE.md",
+    ".github/workflows/release.yml",
   ];
 
   await Promise.all(referencedFiles.map((file) => access(path.join(root, file))));
@@ -39,13 +54,116 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const dashboard = await readFile(path.join(root, "dashboard.html"), "utf8");
   assert.match(dashboard, /id="clear-local-data"/);
   assert.match(dashboard, /id="data-delete-dialog"/);
-  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.3"/);
+  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.4"/);
   assert.match(dashboard, /id="theme-toggle"/);
   assert.match(dashboard, /id="red-pill-button"/);
   assert.match(dashboard, /id="red-pill-dialog"/);
   assert.match(dashboard, /id="purchase-sort-select"/);
   assert.match(dashboard, /id="name-sort-select"/);
-  assert.match(dashboard, /id="search-suggestions"/);
+  assert.match(dashboard, /<option value="download">파일명<\/option>/);
+  assert.match(dashboard, /id="selection-summary"/);
+  assert.match(dashboard, /data-source="free"/);
+  assert.match(dashboard, /id="free-count"/);
+  assert.match(dashboard, /id="language-toggle"/);
+  assert.match(dashboard, /licon-languages/);
+  assert.doesNotMatch(dashboard, /id="language-select"/);
+  assert.doesNotMatch(dashboard, /class="language-control"/);
+  assert.match(dashboard, /id="load-more-sentinel"/);
+  assert.doesNotMatch(dashboard, /id="load-more"/);
+  assert.doesNotMatch(dashboard, /id="search-suggestions"/);
+  assert.match(dashboard, /licon-layout-grid/);
+  assert.match(dashboard, /licon-shopping-bag/);
+  assert.match(dashboard, /licon-gift/);
+  assert.match(dashboard, /licon-star/);
+  assert.match(dashboard, /class="brand-mark" src="assets\/icon128\.png"/);
+  assert.match(dashboard, /class="support-kofi-icon" src="assets\/kofi\/kofi-cup\.png"/);
+
+  const [
+    app,
+    styles,
+    lucideLicense,
+    paperlogyLicense,
+    mPlusLicense,
+    kofiPng,
+    releaseWorkflow,
+    releaseNotes,
+    twitterPost,
+  ] = await Promise.all([
+    readFile(path.join(root, "src/app.js"), "utf8"),
+    readFile(path.join(root, "styles.css"), "utf8"),
+    readFile(path.join(root, "assets/lucide/LICENSE"), "utf8"),
+    readFile(path.join(root, "assets/paperlogy/OFL.txt"), "utf8"),
+    readFile(path.join(root, "assets/m-plus-1/OFL.txt"), "utf8"),
+    readFile(path.join(root, "assets/kofi/kofi-cup.png")),
+    readFile(path.join(root, ".github/workflows/release.yml"), "utf8"),
+    readFile(path.join(root, "store-assets/RELEASE_NOTES_1.0.4.md"), "utf8"),
+    readFile(path.join(root, "store-assets/TWITTER_POST_1.0.4.md"), "utf8"),
+  ]);
+  const legacyIconGlyphs = /[×▦▣◇☆★＋▰▱□♥↗☰⌕☀☾↻↕←↓›]/u;
+  assert.doesNotMatch(`${dashboard}\n${app}`, legacyIconGlyphs);
+  assert.match(app, /className: "item-seller-link"/);
+  assert.match(app, /href: item\.sellerUrl/);
+  assert.match(app, /target: "_blank"/);
+  assert.match(app, /rel: "noopener noreferrer"/);
+  assert.match(app, /function playInitialEntryAnimation\(card\)/);
+  assert.match(app, /event\.animationName !== "cardReveal"/);
+  assert.match(app, /card\.classList\.contains\("is-multi-selected"\) !== selected/);
+  assert.match(app, /badge\.textContent !== selectionNumber/);
+  assert.match(app, /const POINTER_DRAG_THRESHOLD_PX = 7/);
+  assert.match(app, /function handleItemPointerMove\(event\)/);
+  assert.match(app, /document\.elementFromPoint\(event\.clientX, event\.clientY\)/);
+  assert.match(app, /function cloneCardFrontForDrag\(item\)/);
+  assert.match(app, /front\.cloneNode\(true\)/);
+  assert.match(app, /event\.clientX - itemDrag\.pointerOffsetX/);
+  assert.match(app, /const sidebarRect = refs\.sidebar\.getBoundingClientRect\(\)/);
+  assert.match(app, /const horizontalOverlap = verticallyTouchesSidebar/);
+  assert.doesNotMatch(app, /shrinkProgress|sidebarScale|--sidebar-drag-scale/);
+  assert.match(app, /classList\.toggle\("is-over-sidebar", horizontalOverlap > 0\)/);
+  assert.match(app, /clearSelection: draggedCurrentSelection/);
+  assert.match(app, /if \(clearSelection\) selectedItemKeys\.clear\(\)/);
+  assert.match(styles, /@keyframes dragPreviewGather/);
+  assert.match(styles, /\.item-drag-preview\.is-over-sidebar \.item-drag-preview-cluster\s*\{[^}]*opacity:\s*0\.75;[^}]*transform:\s*scale\(0\.75\)/s);
+  assert.match(styles, /\.item-drag-preview-cluster\s*\{[^}]*opacity 240ms[^}]*transform 240ms/s);
+  assert.doesNotMatch(styles, /selectedCardShake/);
+  assert.match(styles, /\.item-card\.is-multi-selected[^}]*transform:\s*translateY\(-5px\)/s);
+  const pointerDragStart = app.slice(
+    app.indexOf("function beginPointerItemDrag"),
+    app.indexOf("function updatePointerDragPosition"),
+  );
+  assert.doesNotMatch(pointerDragStart, /selectedItemKeys\.(?:clear|add)/);
+  assert.doesNotMatch(app, /ITEM_DRAG_MIME/);
+  assert.match(styles, /font-family:\s*"Lucide"/);
+  assert.match(styles, /assets\/lucide\/lucide\.woff2/);
+  assert.match(styles, /assets\/paperlogy\/Paperlogy-4Regular\.ttf/);
+  assert.match(styles, /assets\/paperlogy\/Paperlogy-8ExtraBold\.ttf/);
+  assert.match(styles, /assets\/m-plus-1\/MPLUS1-Variable\.woff2/);
+  assert.match(styles, /--font-ui:\s*"Paperlogy",\s*"M PLUS 1"/);
+  assert.match(styles, /:root:lang\(ja\)[\s\S]*--font-ui:\s*"M PLUS 1",\s*"Paperlogy"/);
+  assert.match(styles, /body,\s*button,\s*input,\s*select,\s*textarea\s*\{[^}]*font-family:\s*var\(--font-ui\)/s);
+  assert.match(styles, /:root:lang\(en\)/);
+  assert.match(styles, /:root:lang\(ja\)/);
+  assert.match(styles, /font-family:\s*var\(--font-ui\)/);
+  assert.doesNotMatch(styles, /Pretendard|Georgia|Times New Roman|ui-monospace/);
+  assert.match(lucideLicense, /ISC License/);
+  assert.match(paperlogyLicense, /SIL OPEN FONT LICENSE Version 1\.1/);
+  assert.match(mPlusLicense, /SIL OPEN FONT LICENSE Version 1\.1/);
+  assert.equal(kofiPng[25], 6, "Ko-fi PNG should include an alpha channel");
+  assert.match(releaseWorkflow, /assets\/lucide assets\/kofi assets\/paperlogy assets\/m-plus-1/);
+  assert.doesNotMatch(releaseWorkflow, /assets\/pretendard|assets\/ibm-plex|assets\/gmarket-sans/);
+  assert.match(releaseNotes, /68개 주요 아바타/);
+  assert.match(releaseNotes, /Paperlogy/);
+  assert.match(twitterPost, /#BOOTH_Shelf/);
+  assert.match(twitterPost, /chromewebstore\.google\.com\/detail\/aibjhdieagkjmcodaiopaklonjbdmbpj/);
+  assert.doesNotMatch(twitterPost, /Shift 다중선택|^#BOOTH$/m);
+  assert.match(app, /new IntersectionObserver/);
+  assert.match(app, /loadNextResultPage/);
+  assert.match(app, /className: "item-visual-header"/);
+  assert.match(app, /text: t\(assignedFolderId \? "폴더 변경" : "폴더에 넣기"\)/);
+  assert.match(app, /actions\.append\(assignButton, favoriteButton\)/);
+  assert.match(app, /const LOCALE_SEQUENCE = Object\.freeze\(\["ko", "en", "ja"\]\)/);
+  assert.match(app, /refs\["language-toggle"\]\.addEventListener\("click"/);
+  assert.match(styles, /\.licon-languages::before \{ content: "\\e0fe"; \}/);
+  assert.match(styles, /html\.is-theme-switching[\s\S]*transition:\s*none !important/);
 
   const supportLink = dashboard.match(/<a(?=[^>]*class="support-link")[^>]*>/)?.[0];
   assert.ok(supportLink, "Ko-fi 후원 링크가 있어야 한다");

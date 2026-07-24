@@ -34,6 +34,18 @@ test("썸네일과 출처 페이지 URL을 정확한 허용 목록으로 제한�
   assert.equal(sanitizeImageUrl("https://booth.pximg.net/c/300x300/i/999/image.jpg", "123"), "");
   assert.equal(buildSourcePageUrl("gift", 4), "https://accounts.booth.pm/library/gifts?page=4");
   assert.equal(
+    buildSourcePageUrl("free", 3),
+    "https://accounts.booth.pm/library/free_downloads?page=3",
+  );
+  assert.equal(
+    sanitizeSourcePageUrl(
+      "https://accounts.booth.pm/library/free_downloads?page=7",
+      "free",
+      1,
+    ),
+    "https://accounts.booth.pm/library/free_downloads?page=7",
+  );
+  assert.equal(
     sanitizeSourcePageUrl("https://evil.example/library?page=4", "purchased", 2),
     "https://accounts.booth.pm/library?page=2",
   );

@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "BOOTH Shelf",
-  "version": "1.0.3",
-  "version_name": "1.0.3",
-  "description": "내 BOOTH 라이브러리와 기프트함을 한곳에서 검색하고 폴더로 정리합니다.",
+  "version": "1.0.4",
+  "version_name": "1.0.4",
+  "description": "내 BOOTH 라이브러리·기프트·무료 상품을 한곳에서 검색하고 폴더로 정리합니다.",
   "icons": {
     "16": "assets/icon16.png",
     "32": "assets/icon32.png",

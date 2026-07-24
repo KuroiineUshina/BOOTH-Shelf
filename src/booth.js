@@ -13,6 +13,7 @@ import {
   sanitizeSellerUrl,
   sanitizeSourcePageUrl,
 } from "./urls.js";
+import { formatLocalizedNumber, t } from "./i18n.js";
 
 const RETRIABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const MAX_RETRY_DELAY_MS = 30_000;
@@ -29,6 +30,11 @@ export const SOURCES = Object.freeze([
     id: "gift",
     label: "기프트",
     path: "/library/gifts",
+  },
+  {
+    id: "free",
+    label: "무료",
+    path: "/library/free_downloads",
   },
 ]);
 
@@ -53,6 +59,18 @@ function itemLocation(item) {
   };
 }
 
+function mergeDownloadFiles(...fileLists) {
+  const files = new Map();
+  for (const file of fileLists.flat()) {
+    const label = String(file?.label || "").replace(/\s+/gu, " ").trim().slice(0, 240);
+    const detail = String(file?.detail || "").replace(/\s+/gu, " ").trim().slice(0, 80);
+    if (!label) continue;
+    const key = `${label.toLocaleLowerCase()}|${detail.toLocaleLowerCase()}`;
+    if (!files.has(key)) files.set(key, { label, detail });
+  }
+  return [...files.values()];
+}
+
 /**
  * BOOTH can list the same product once per owned avatar variation and in both
  * the purchase and gift libraries. Keep one UI item per product while retaining
@@ -74,6 +92,7 @@ export function groupBoothLibraryItems(items) {
         productId,
         sources: [],
         locations: [],
+        downloadFiles: mergeDownloadFiles(item.downloadFiles),
         globalOrder: Number.isSafeInteger(item.globalOrder) && item.globalOrder >= 0
           ? item.globalOrder
           : 0,
@@ -93,6 +112,7 @@ export function groupBoothLibraryItems(items) {
         group.sellerUrl = item.sellerUrl;
         group.sellerName = item.sellerName || group.sellerName;
       }
+      group.downloadFiles = mergeDownloadFiles(group.downloadFiles, item.downloadFiles);
     }
 
     const candidateSources = Array.isArray(item.sources) ? item.sources : [item.source];
@@ -146,7 +166,7 @@ export function groupBoothLibraryItems(items) {
 }
 
 export class BoothAuthError extends Error {
-  constructor(message = "BOOTH 로그인이 필요합니다.") {
+  constructor(message = t("BOOTH 로그인이 필요합니다.")) {
     super(message);
     this.name = "BoothAuthError";
     this.code = "AUTH_REQUIRED";
@@ -242,11 +262,11 @@ export function getPageNumber(href, sourcePath, baseUrl = BOOTH_ACCOUNTS_ORIGIN)
 
 export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
   if (typeof DOMParser === "undefined") {
-    throw new Error("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다.");
+    throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
   }
 
   const sourceConfig = SOURCES.find((entry) => entry.id === source);
-  if (!sourceConfig) throw new Error("알 수 없는 라이브러리 유형입니다.");
+  if (!sourceConfig) throw new Error(t("알 수 없는 라이브러리 유형입니다."));
 
   const documentNode = new DOMParser().parseFromString(html, "text/html");
   assertAuthenticated(documentNode);
@@ -264,6 +284,10 @@ export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
     seen.add(productId);
     const card = findProductCard(anchor, productId, pageUrl);
     const seller = readSeller(card, pageUrl);
+    const downloads = readDownloadOptionsFromDocument(documentNode, {
+      productId,
+      pageUrl,
+    });
 
     items.push({
       key: `product:${productId}`,
@@ -274,6 +298,7 @@ export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
       ...seller,
       imageUrl: readProductImage(card, productId, pageUrl),
       productUrl: sanitizeProductUrl(href, productId, pageUrl),
+      downloadFiles: downloads.options.map(({ label, detail }) => ({ label, detail })),
       sourcePageUrl: buildSourcePageUrl(source, page),
       page,
       orderOnPage: items.length,
@@ -336,7 +361,7 @@ function readDownloadLabel(control, card, index) {
     node = node.parentElement;
   }
 
-  return `다운로드 파일 ${index + 1}`;
+  return t("다운로드 파일 {number}", { number: index + 1 });
 }
 
 function splitDownloadLabel(value, fallback) {
@@ -351,16 +376,10 @@ function splitDownloadLabel(value, fallback) {
   };
 }
 
-export function parseBoothDownloadOptions(html, { productId, pageUrl }) {
-  if (typeof DOMParser === "undefined") {
-    throw new Error("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다.");
-  }
+function readDownloadOptionsFromDocument(documentNode, { productId, pageUrl }) {
   if (!/^\d+$/.test(String(productId || ""))) {
-    throw new Error("올바르지 않은 BOOTH 상품 ID입니다.");
+    throw new Error(t("올바르지 않은 BOOTH 상품 ID입니다."));
   }
-
-  const documentNode = new DOMParser().parseFromString(html, "text/html");
-  assertAuthenticated(documentNode);
 
   const productAnchors = Array.from(documentNode.querySelectorAll('a[href*="/items/"]'))
     .filter((anchor) => extractProductId(anchor.getAttribute("href"), pageUrl) === String(productId));
@@ -383,7 +402,7 @@ export function parseBoothDownloadOptions(html, { productId, pageUrl }) {
       if (!url || seen.has(url)) continue;
 
       seen.add(url);
-      const fallback = `다운로드 파일 ${options.length + 1}`;
+      const fallback = t("다운로드 파일 {number}", { number: options.length + 1 });
       const copy = splitDownloadLabel(readDownloadLabel(control, card, options.length), fallback);
       options.push({
         id: new URL(url).pathname.match(/\/downloadables\/(\d+)/)?.[1] || String(options.length + 1),
@@ -394,6 +413,16 @@ export function parseBoothDownloadOptions(html, { productId, pageUrl }) {
   }
 
   return { found: true, options };
+}
+
+export function parseBoothDownloadOptions(html, { productId, pageUrl }) {
+  if (typeof DOMParser === "undefined") {
+    throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
+  }
+
+  const documentNode = new DOMParser().parseFromString(html, "text/html");
+  assertAuthenticated(documentNode);
+  return readDownloadOptionsFromDocument(documentNode, { productId, pageUrl });
 }
 
 export function getOrdersPageNumber(href, baseUrl = BOOTH_ACCOUNTS_ORIGIN) {
@@ -410,7 +439,7 @@ export function getOrdersPageNumber(href, baseUrl = BOOTH_ACCOUNTS_ORIGIN) {
 
 export function parseBoothOrdersPage(html, { pageUrl = buildOrdersPageUrl(1) } = {}) {
   if (typeof DOMParser === "undefined") {
-    throw new Error("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다.");
+    throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
   }
 
   const documentNode = new DOMParser().parseFromString(html, "text/html");
@@ -445,7 +474,7 @@ function parseOrderMoney(value) {
 
 export function parseBoothOrderDetail(html, { orderId, pageUrl } = {}) {
   if (typeof DOMParser === "undefined") {
-    throw new Error("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다.");
+    throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
   }
 
   const documentNode = new DOMParser().parseFromString(html, "text/html");
@@ -456,7 +485,7 @@ export function parseBoothOrderDetail(html, { orderId, pageUrl } = {}) {
     .match(/\b(\d{4,})\b/)?.[1];
   const resolvedOrderId = headingOrderId || getBoothOrderId(pageUrl) || String(orderId || "");
   if (!/^\d+$/.test(resolvedOrderId)) {
-    throw new Error("BOOTH 주문 번호를 확인하지 못했어요.");
+    throw new Error(t("BOOTH 주문 번호를 확인하지 못했어요."));
   }
 
   if (!completedBadge) {
@@ -482,7 +511,7 @@ export function summarizeBoothOrderDetails(details, scannedAt = new Date().toISO
   for (const detail of Array.isArray(details) ? details : []) {
     if (!detail?.completed) continue;
     if (!detail.money) {
-      throw new Error("일부 완료 주문의 결제 금액을 읽지 못했어요. 잠시 후 다시 시도해 주세요.");
+      throw new Error(t("일부 완료 주문의 결제 금액을 읽지 못했어요. 잠시 후 다시 시도해 주세요."));
     }
     if (!/^\d+$/.test(String(detail.orderId || ""))) continue;
     if (!completedOrders.has(detail.orderId)) completedOrders.set(detail.orderId, detail.money);
@@ -505,7 +534,7 @@ export function summarizeBoothOrderDetails(details, scannedAt = new Date().toISO
 
 async function fetchHtml(url) {
   if (!isAllowedLibraryUrl(url) && !isAllowedOrdersUrl(url)) {
-    throw new Error("허용되지 않은 BOOTH 주소 요청을 차단했습니다.");
+    throw new Error(t("허용되지 않은 BOOTH 주소 요청을 차단했습니다."));
   }
 
   const scheduledAt = Math.max(Date.now(), nextRequestAt);
@@ -526,10 +555,10 @@ async function fetchHtml(url) {
 
   if (response.url.includes("/users/sign_in")) throw new BoothAuthError();
   if (!isAllowedLibraryUrl(response.url) && !isAllowedOrdersUrl(response.url)) {
-    throw new Error("BOOTH가 예상하지 않은 주소로 이동해 응답을 차단했습니다.");
+    throw new Error(t("BOOTH가 예상하지 않은 주소로 이동해 응답을 차단했습니다."));
   }
   if (!response.ok) {
-    const error = new Error(`BOOTH 응답 오류 (${response.status})`);
+    const error = new Error(t("BOOTH 응답 오류 ({status})", { status: response.status }));
     error.status = response.status;
     error.retryAfterMs = parseRetryAfter(response.headers.get("Retry-After"));
     throw error;
@@ -577,7 +606,7 @@ async function fetchWithRetry(url, attempts = 3) {
 
 export async function loadBoothDownloadOptions(item) {
   if (!/^\d+$/.test(String(item?.productId || ""))) {
-    throw new Error("다운로드할 상품 정보가 올바르지 않습니다.");
+    throw new Error(t("다운로드할 상품 정보가 올바르지 않습니다."));
   }
 
   const candidates = Array.isArray(item.locations) && item.locations.length
@@ -602,7 +631,7 @@ export async function loadBoothDownloadOptions(item) {
   }
 
   if (!locations.length) {
-    throw new Error("다운로드할 상품 정보가 올바르지 않습니다.");
+    throw new Error(t("다운로드할 상품 정보가 올바르지 않습니다."));
   }
 
   const results = await runPool(locations, 2, async ({ pageUrl }) => {
@@ -623,12 +652,12 @@ export async function loadBoothDownloadOptions(item) {
   }
 
   if (!found) {
-    const error = new Error("현재 페이지에서 상품을 찾지 못했어요. 전체 동기화 후 다시 시도해 주세요.");
+    const error = new Error(t("현재 페이지에서 상품을 찾지 못했어요. 전체 동기화 후 다시 시도해 주세요."));
     error.code = "PRODUCT_NOT_FOUND";
     throw error;
   }
   if (!options.length) {
-    const error = new Error("이 상품에서 바로 받을 수 있는 다운로드 파일을 찾지 못했어요.");
+    const error = new Error(t("이 상품에서 바로 받을 수 있는 다운로드 파일을 찾지 못했어요."));
     error.code = "DOWNLOADS_NOT_FOUND";
     throw error;
   }
@@ -653,7 +682,13 @@ async function runPool(tasks, concurrency, worker) {
 }
 
 export async function calculateBoothSpending(onProgress = () => {}) {
-  onProgress({ phase: "orders", completed: 0, total: 0, percent: 3, message: "구매 내역 페이지 확인 중" });
+  onProgress({
+    phase: "orders",
+    completed: 0,
+    total: 0,
+    percent: 3,
+    message: t("구매 내역 페이지 확인 중"),
+  });
 
   const firstPageUrl = buildOrdersPageUrl(1);
   const firstHtml = await fetchWithRetry(firstPageUrl);
@@ -673,7 +708,10 @@ export async function calculateBoothSpending(onProgress = () => {}) {
       completed: pagesCompleted,
       total: firstPage.pageCount,
       percent: Math.round(5 + (pagesCompleted / firstPage.pageCount) * 15),
-      message: `구매 내역 ${pagesCompleted}/${firstPage.pageCount} 페이지`,
+      message: t("구매 내역 {completed}/{total} 페이지", {
+        completed: pagesCompleted,
+        total: firstPage.pageCount,
+      }),
     });
     return parsed;
   });
@@ -701,7 +739,10 @@ export async function calculateBoothSpending(onProgress = () => {}) {
       completed: detailsCompleted,
       total: orderIds.length,
       percent: Math.round(20 + (detailsCompleted / orderIds.length) * 80),
-      message: `결제 금액 ${detailsCompleted}/${orderIds.length}건 확인 중`,
+      message: t("결제 금액 {completed}/{total}건 확인 중", {
+        completed: detailsCompleted,
+        total: orderIds.length,
+      }),
     });
     return detail;
   });
@@ -710,7 +751,12 @@ export async function calculateBoothSpending(onProgress = () => {}) {
 }
 
 export async function syncBoothLibrary(onProgress = () => {}) {
-  onProgress({ phase: "starting", completed: 0, total: 0, message: "라이브러리 연결 중" });
+  onProgress({
+    phase: "starting",
+    completed: 0,
+    total: 0,
+    message: t("라이브러리 연결 중"),
+  });
 
   let firstCompleted = 0;
   const firstPages = await Promise.all(SOURCES.map(async (sourceConfig, index) => {
@@ -726,7 +772,7 @@ export async function syncBoothLibrary(onProgress = () => {}) {
       phase: "reading",
       completed: firstCompleted,
       total: 0,
-      message: `${sourceConfig.label} 목록 확인 중`,
+      message: t("{source} 목록 확인 중", { source: t(sourceConfig.label) }),
     });
     return { sourceConfig, parsed };
   }));
@@ -744,7 +790,7 @@ export async function syncBoothLibrary(onProgress = () => {}) {
     phase: "reading",
     completed,
     total,
-    message: "전체 페이지 수를 확인했어요",
+    message: t("전체 페이지 수를 확인했어요"),
   });
   const remainingPages = await runPool(tasks, 2, async ({ sourceConfig, page }) => {
     const pageUrl = `${BOOTH_ACCOUNTS_ORIGIN}${sourceConfig.path}?page=${page}`;
@@ -759,7 +805,11 @@ export async function syncBoothLibrary(onProgress = () => {}) {
       phase: "reading",
       completed,
       total,
-      message: `${sourceConfig.label} ${page}/${parsed.pageCount || page} 페이지`,
+      message: t("{source} {page}/{total} 페이지", {
+        source: t(sourceConfig.label),
+        page,
+        total: parsed.pageCount || page,
+      }),
     });
     return { sourceConfig, parsed };
   });
@@ -779,15 +829,23 @@ export async function syncBoothLibrary(onProgress = () => {}) {
     .map((item, globalOrder) => ({ ...item, globalOrder }));
 
   const uniqueItems = groupBoothLibraryItems(items);
+  const downloadFileCount = uniqueItems.reduce(
+    (count, item) => count + (item.downloadFiles?.length || 0),
+    0,
+  );
   onProgress({
     phase: "complete",
     completed: total,
     total,
-    message: `${uniqueItems.length.toLocaleString("ko-KR")}개 상품을 불러왔어요`,
+    message: t("{items}개 상품 · {files}개 파일을 불러왔어요", {
+      items: formatLocalizedNumber(uniqueItems.length),
+      files: formatLocalizedNumber(downloadFileCount),
+    }),
   });
 
   return {
     items: uniqueItems,
+    downloadFileCount,
     syncedAt: new Date().toISOString(),
   };
 }

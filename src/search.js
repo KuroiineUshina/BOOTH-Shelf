@@ -143,8 +143,6 @@ const KATAKANA_HANGUL = {
   ヴァ: "바", ヴィ: "비", ヴェ: "베", ヴォ: "보",
 };
 
-const suggestionIndexCache = new WeakMap();
-
 function composeHangul(initial, medial, final = "") {
   const initialIndex = CHOSEONG_INDEX.get(initial);
   const medialIndex = JUNGSEONG_INDEX.get(medial);
@@ -271,17 +269,137 @@ export function hangulToEnglishKeyboard(value) {
   return output;
 }
 
-export function buildSearchVariants(value) {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function buildBaseSearchVariants(value) {
   const raw = String(value ?? "").normalize("NFC");
-  return Array.from(new Set([
+  const variants = new Set([
     normalizeSearchText(raw),
     normalizeSearchText(englishKeyboardToHangul(raw)),
     normalizeSearchText(hangulToEnglishKeyboard(raw)),
-  ].filter(Boolean)));
+  ].filter(Boolean));
+
+  for (const match of raw.matchAll(/[ァ-ヺー]{2,}|[ぁ-ゖー]{2,}/gu)) {
+    const kana = hiraganaToKatakana(match[0]);
+    variants.add(normalizeSearchText(kana));
+    variants.add(normalizeSearchText(katakanaToRomaji(kana)));
+    variants.add(normalizeSearchText(katakanaToHangul(kana)));
+  }
+
+  variants.delete("");
+  return [...variants];
 }
 
-function compact(value) {
-  return normalizeSearchText(value).replace(/[\s\p{P}\p{S}]+/gu, "");
+export function buildLiteralSearchVariants(value) {
+  return buildBaseSearchVariants(value);
+}
+
+let avatarSearchData;
+
+function getAvatarSearchData() {
+  if (avatarSearchData) return avatarSearchData;
+
+  const latinTerms = new Map();
+  const nonLatinTermsByFirstCharacter = new Map();
+  const partialTerms = [];
+  const seenPartialTerms = new Set();
+  const expandedProfiles = AVATAR_SEARCH_ALIASES.map((avatar, profileIndex) => {
+    const names = [...avatar.terms, ...avatar.aliases];
+    const variants = new Set();
+
+    for (const name of names) {
+      for (const variant of buildBaseSearchVariants(name)) variants.add(variant);
+      const normalizedName = normalizeSearchText(name);
+      if (!normalizedName) continue;
+      const partialKey = `${profileIndex}:${normalizedName}`;
+      if (!seenPartialTerms.has(partialKey)) {
+        seenPartialTerms.add(partialKey);
+        partialTerms.push({ term: normalizedName, profileIndex });
+      }
+      if (/^[a-z0-9][a-z0-9 _-]*$/u.test(normalizedName)) {
+        const profileIndexes = latinTerms.get(normalizedName) ?? [];
+        profileIndexes.push(profileIndex);
+        latinTerms.set(normalizedName, profileIndexes);
+      } else {
+        const firstCharacter = Array.from(normalizedName)[0];
+        const entries = nonLatinTermsByFirstCharacter.get(firstCharacter) ?? [];
+        entries.push({ term: normalizedName, profileIndex });
+        nonLatinTermsByFirstCharacter.set(firstCharacter, entries);
+      }
+    }
+    return [...variants];
+  });
+
+  const alternatives = [...latinTerms.keys()]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp);
+  const latinPattern = alternatives.length
+    ? new RegExp(`(?:^|[^a-z0-9])(${alternatives.join("|")})(?=$|[^a-z0-9])`, "giu")
+    : null;
+
+  avatarSearchData = {
+    expandedProfiles,
+    latinPattern,
+    latinTerms,
+    nonLatinTermsByFirstCharacter,
+    partialTerms,
+  };
+  return avatarSearchData;
+}
+
+function matchingAvatarProfileIndexes(values) {
+  const {
+    latinPattern,
+    latinTerms,
+    nonLatinTermsByFirstCharacter,
+    partialTerms,
+  } = getAvatarSearchData();
+  const matches = new Set();
+
+  for (const value of values) {
+    const normalizedValue = normalizeSearchText(value);
+    if (!normalizedValue) continue;
+    const partialQueries = new Set([
+      normalizedValue,
+      ...(normalizedValue.match(/[\p{L}\p{N}]+/gu) ?? []),
+    ]);
+
+    for (const partialQuery of partialQueries) {
+      for (const { term, profileIndex } of partialTerms) {
+        if (term.includes(partialQuery)) matches.add(profileIndex);
+      }
+    }
+
+    if (latinPattern) {
+      latinPattern.lastIndex = 0;
+      for (const match of normalizedValue.matchAll(latinPattern)) {
+        for (const profileIndex of latinTerms.get(normalizeSearchText(match[1])) ?? []) {
+          matches.add(profileIndex);
+        }
+      }
+    }
+
+    for (const firstCharacter of new Set(Array.from(normalizedValue))) {
+      for (const { term, profileIndex } of nonLatinTermsByFirstCharacter.get(firstCharacter) ?? []) {
+        if (normalizedValue.includes(term)) matches.add(profileIndex);
+      }
+    }
+  }
+
+  return matches;
+}
+
+export function buildSearchVariants(value) {
+  const raw = String(value ?? "").normalize("NFC");
+  const variants = new Set(buildBaseSearchVariants(raw));
+  const { expandedProfiles } = getAvatarSearchData();
+  for (const profileIndex of matchingAvatarProfileIndexes([raw, ...variants])) {
+    for (const variant of expandedProfiles[profileIndex]) variants.add(variant);
+  }
+
+  return [...variants];
 }
 
 function transliterateKatakana(value, table) {
@@ -327,138 +445,3 @@ export function hiraganaToKatakana(value) {
     return character;
   }).join("");
 }
-
-function levenshtein(left, right) {
-  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-  for (let leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
-    const current = [leftIndex + 1];
-    for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
-      current.push(Math.min(
-        current[rightIndex] + 1,
-        previous[rightIndex + 1] + 1,
-        previous[rightIndex] + (left[leftIndex] === right[rightIndex] ? 0 : 1),
-      ));
-    }
-    previous.splice(0, previous.length, ...current);
-  }
-  return previous[right.length];
-}
-
-function similarityScore(query, candidate) {
-  if (!query || !candidate) return 0;
-  if (query === candidate) return 120;
-  if (query.length >= 3 && (candidate.startsWith(query) || query.startsWith(candidate))) {
-    return 96 - Math.abs(candidate.length - query.length);
-  }
-  const distanceLimit = query.length >= 7 ? 2 : query.length >= 4 ? 1 : 0;
-  if (distanceLimit && Math.abs(query.length - candidate.length) <= distanceLimit) {
-    const distance = levenshtein(query, candidate);
-    if (distance <= distanceLimit) return 80 - distance;
-  }
-  return 0;
-}
-
-function addSuggestionCandidate(candidates, suggestion, aliases = []) {
-  const forms = candidates.get(suggestion) ?? new Set();
-  const kana = hiraganaToKatakana(suggestion);
-  forms.add(compact(suggestion));
-  forms.add(compact(katakanaToRomaji(kana)));
-  forms.add(compact(katakanaToHangul(kana)));
-  for (const alias of aliases) forms.add(compact(alias));
-  forms.delete("");
-  candidates.set(suggestion, forms);
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
-function valueContainsTerm(value, term) {
-  const normalizedValue = normalizeSearchText(value);
-  const normalizedTerm = normalizeSearchText(term);
-  if (!normalizedValue || !normalizedTerm) return false;
-  if (/^[a-z0-9][a-z0-9 _-]*$/iu.test(normalizedTerm)) {
-    const matcher = new RegExp(
-      `(^|[^a-z0-9])${escapeRegExp(normalizedTerm)}($|[^a-z0-9])`,
-      "iu",
-    );
-    return matcher.test(normalizedValue);
-  }
-  return normalizedValue.includes(normalizedTerm);
-}
-
-function buildSuggestionIndex(items, searchField) {
-  const candidates = new Map();
-  for (const item of items) {
-    const values = searchField === "title"
-      ? [item.title]
-      : searchField === "seller"
-        ? [item.sellerName]
-        : [item.title, item.sellerName];
-
-    for (const value of values) {
-      const rawValue = String(value ?? "");
-      for (const match of rawValue.matchAll(/[ァ-ヺー]{2,}|[ぁ-ゖー]{2,}/gu)) {
-        addSuggestionCandidate(candidates, match[0]);
-      }
-
-      for (const avatar of AVATAR_SEARCH_ALIASES) {
-        const matchedTerm = avatar.terms.find((term) => valueContainsTerm(rawValue, term));
-        if (matchedTerm) {
-          addSuggestionCandidate(candidates, matchedTerm, [
-            ...avatar.terms,
-            ...avatar.aliases,
-          ]);
-        }
-      }
-    }
-  }
-  return candidates;
-}
-
-function suggestionIndexForItems(items, searchField) {
-  if (!Array.isArray(items)) return new Map();
-  const normalizedField = ["all", "title", "seller"].includes(searchField) ? searchField : "all";
-  let byField = suggestionIndexCache.get(items);
-  if (!byField) {
-    byField = new Map();
-    suggestionIndexCache.set(items, byField);
-  }
-  if (!byField.has(normalizedField)) {
-    byField.set(normalizedField, buildSuggestionIndex(items, normalizedField));
-  }
-  return byField.get(normalizedField);
-}
-
-export function suggestAvatarSearchTerms(query, items, { searchField = "all", limit = 3 } = {}) {
-  const rawQuery = normalizeSearchText(query);
-  if (rawQuery.length < 2) return [];
-
-  const queryForms = new Set();
-  for (const variant of buildSearchVariants(rawQuery)) {
-    queryForms.add(compact(variant));
-    for (const token of variant.split(/\s+/u)) {
-      if (token.length >= 2) queryForms.add(compact(token));
-    }
-  }
-
-  const scored = [];
-  for (const [term, candidateForms] of suggestionIndexForItems(items, searchField)) {
-    if (queryForms.has(compact(term))) continue;
-
-    let score = 0;
-    for (const queryForm of queryForms) {
-      for (const candidateForm of candidateForms) {
-        score = Math.max(score, similarityScore(queryForm, candidateForm));
-      }
-    }
-    if (score) scored.push({ term, score });
-  }
-
-  return scored
-    .sort((left, right) => right.score - left.score || left.term.localeCompare(right.term, "ja"))
-    .slice(0, Math.max(1, limit))
-    .map(({ term }) => term);
-}
-
-export const suggestJapaneseSearchTerms = suggestAvatarSearchTerms;

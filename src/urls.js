@@ -4,6 +4,7 @@ export const BOOTH_PRODUCT_ORIGIN = "https://booth.pm";
 const SOURCE_PATHS = Object.freeze({
   purchased: "/library",
   gift: "/library/gifts",
+  free: "/library/free_downloads",
 });
 const ORDERS_PATH = "/orders";
 

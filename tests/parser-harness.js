@@ -99,6 +99,11 @@ try {
     page: 1,
     pageUrl: "https://accounts.booth.pm/library?page=1",
   });
+  const freeResult = parseBoothLibraryPage(fixture, {
+    source: "free",
+    page: 1,
+    pageUrl: "https://accounts.booth.pm/library/free_downloads?page=1",
+  });
   const downloads = parseBoothDownloadOptions(fixture, {
     productId: "101",
     pageUrl: "https://accounts.booth.pm/library?page=1",
@@ -124,8 +129,12 @@ try {
     ok: result.items.length === 2
       && result.pageCount === 9
       && result.items[0].sellerName === "Maker One"
+      && result.items[0].downloadFiles.length === 3
+      && result.items[0].downloadFiles[0].label === "avatar_package_v2.zip"
       && result.items[1].productId === "202"
       && result.items[1].productUrl === "https://booth.pm/ja/items/202"
+      && freeResult.items.length === 2
+      && freeResult.items.every((item) => item.sources.includes("free"))
       && downloads.found
       && downloads.options.length === 3
       && downloads.options[0].label === "avatar_package_v2.zip"
@@ -144,6 +153,7 @@ try {
     pageCount: result.pageCount,
     first: result.items[0],
     second: result.items[1],
+    freeResult,
     downloads,
     orders,
     orderDetail,

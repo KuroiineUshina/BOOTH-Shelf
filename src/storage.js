@@ -11,13 +11,14 @@ export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
 
 const MAX_STORED_ITEMS = 50_000;
 const MAX_ITEM_LOCATIONS = 256;
+const MAX_DOWNLOAD_FILES_PER_ITEM = 512;
 const MAX_STORED_FOLDERS = 2_000;
 const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-const ITEM_SOURCES = Object.freeze(["purchased", "gift"]);
+const ITEM_SOURCES = Object.freeze(["purchased", "gift", "free"]);
 
 export const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   items: [],
   folders: [],
   favorites: [],
@@ -63,6 +64,7 @@ export function sanitizePreferences(value) {
   const preferences = isRecord(value) ? value : {};
   return {
     theme: preferences.theme === "dark" ? "dark" : "light",
+    locale: ["ko", "en", "ja"].includes(preferences.locale) ? preferences.locale : "auto",
   };
 }
 
@@ -149,6 +151,26 @@ function mergeLocations(...locationLists) {
   return sortLocations([...merged.values()].slice(0, MAX_ITEM_LOCATIONS));
 }
 
+function sanitizeDownloadFiles(value) {
+  if (!Array.isArray(value)) return [];
+  const files = new Map();
+
+  for (const candidate of value.slice(0, MAX_DOWNLOAD_FILES_PER_ITEM)) {
+    if (!isRecord(candidate)) continue;
+    const label = cleanString(candidate.label, 240);
+    const detail = cleanString(candidate.detail, 80);
+    if (!label) continue;
+    const key = `${label.toLocaleLowerCase()}|${detail.toLocaleLowerCase()}`;
+    if (!files.has(key)) files.set(key, { label, detail });
+  }
+
+  return [...files.values()];
+}
+
+function mergeDownloadFiles(...fileLists) {
+  return sanitizeDownloadFiles(fileLists.flat());
+}
+
 function withPrimaryLocation(item) {
   const primary = item.locations[0];
   return {
@@ -208,6 +230,7 @@ function sanitizeItem(value) {
     sellerUrl: sanitizeSellerUrl(value.sellerUrl),
     imageUrl: sanitizeImageUrl(value.imageUrl, productId),
     productUrl: sanitizeProductUrl(value.productUrl, productId),
+    downloadFiles: sanitizeDownloadFiles(value.downloadFiles),
     globalOrder: nonNegativeInteger(value.globalOrder),
   });
 }
@@ -227,6 +250,7 @@ function mergeItems(existing, incoming) {
     sellerUrl: existing.sellerUrl || incoming.sellerUrl,
     imageUrl: existing.imageUrl || incoming.imageUrl,
     productUrl: existing.productUrl || incoming.productUrl,
+    downloadFiles: mergeDownloadFiles(existing.downloadFiles, incoming.downloadFiles),
     globalOrder: Math.min(existing.globalOrder, incoming.globalOrder),
   });
 }
@@ -246,7 +270,7 @@ function sanitizeItems(value) {
 
 function normalizeStoredItemKey(value) {
   if (typeof value !== "string") return null;
-  const match = value.match(/^(?:product|purchased|gift):((?:\d+|demo-\d+))$/);
+  const match = value.match(/^(?:product|purchased|gift|free):((?:\d+|demo-\d+))$/);
   return match ? `product:${match[1]}` : null;
 }
 

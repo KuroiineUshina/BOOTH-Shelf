@@ -46,6 +46,7 @@ jobs:
           cp manifest.json background.js dashboard.html styles.css "$store_dir/"
           cp -R src "$store_dir/"
           cp assets/icon16.png assets/icon32.png assets/icon48.png assets/icon128.png "$store_dir/assets/"
+          cp -R assets/lucide assets/kofi assets/paperlogy assets/m-plus-1 "$store_dir/assets/"
           (
             cd dist
             zip -rq "$(basename "$archive")" booth-shelf

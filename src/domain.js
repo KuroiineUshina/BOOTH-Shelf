@@ -1,4 +1,5 @@
 import {
+  buildLiteralSearchVariants,
   buildSearchVariants,
   normalizeSearchText,
 } from "./search.js";
@@ -9,17 +10,52 @@ const collator = new Intl.Collator(["ko", "ja", "en"], {
   numeric: true,
   sensitivity: "base",
 });
+const itemSearchIndexCache = new WeakMap();
 
 export function normalizeText(value) {
   return normalizeSearchText(value);
 }
 
 export function itemHasSource(item, source) {
-  if (!item || !["purchased", "gift"].includes(source)) return false;
+  if (!item || !["purchased", "gift", "free"].includes(source)) return false;
   const sources = Array.isArray(item.sources) && item.sources.length
     ? item.sources
     : [item.source];
   return sources.includes(source);
+}
+
+function searchIndexForItem(item) {
+  if (!item || typeof item !== "object") {
+    return { title: [], seller: [], downloads: [] };
+  }
+  const cached = itemSearchIndexCache.get(item);
+  if (cached) return cached;
+
+  const index = {
+    title: buildLiteralSearchVariants(item.title),
+    seller: buildLiteralSearchVariants(item.sellerName),
+    downloads: (Array.isArray(item.downloadFiles) ? item.downloadFiles : [])
+      .map((file) => ({
+        file,
+        variants: buildLiteralSearchVariants(`${file?.label || ""} ${file?.detail || ""}`),
+      })),
+  };
+  itemSearchIndexCache.set(item, index);
+  return index;
+}
+
+function variantsMatch(queryVariants, valueVariants) {
+  return queryVariants.some((queryVariant) => (
+    valueVariants.some((valueVariant) => valueVariant.includes(queryVariant))
+  ));
+}
+
+export function matchingDownloadFiles(item, query) {
+  const queryVariants = buildSearchVariants(query);
+  if (!queryVariants.length) return [];
+  return searchIndexForItem(item).downloads
+    .filter(({ variants }) => variantsMatch(queryVariants, variants))
+    .map(({ file }) => file);
 }
 
 export function filterItems(items, filters = {}) {
@@ -48,16 +84,17 @@ export function filterItems(items, filters = {}) {
 
     if (!queryVariants.length) return true;
 
-    const matchesQuery = (value) => {
-      const valueVariants = buildSearchVariants(value);
-      return queryVariants.some((queryVariant) => (
-        valueVariants.some((valueVariant) => valueVariant.includes(queryVariant))
-      ));
-    };
+    const searchIndex = searchIndexForItem(item);
+    const titleMatches = variantsMatch(queryVariants, searchIndex.title);
+    const sellerMatches = variantsMatch(queryVariants, searchIndex.seller);
+    const downloadMatches = searchIndex.downloads.some(({ variants }) => (
+      variantsMatch(queryVariants, variants)
+    ));
 
-    if (searchField === "title") return matchesQuery(item.title);
-    if (searchField === "seller") return matchesQuery(item.sellerName);
-    return matchesQuery(item.title) || matchesQuery(item.sellerName);
+    if (searchField === "title") return titleMatches;
+    if (searchField === "seller") return sellerMatches;
+    if (searchField === "download") return downloadMatches;
+    return titleMatches || sellerMatches || downloadMatches;
   });
 }
 
@@ -75,17 +112,61 @@ function normalizeSort(sort) {
   return { purchase, name };
 }
 
+export function updateSortMode(sort, lastSortDirection, kind, mode) {
+  if (!["purchase", "name"].includes(kind) || !["off", "asc", "desc"].includes(mode)) {
+    return {
+      sort: normalizeSort(sort),
+      lastSortDirection: {
+        purchase: ["asc", "desc"].includes(lastSortDirection?.purchase)
+          ? lastSortDirection.purchase
+          : "asc",
+        name: ["asc", "desc"].includes(lastSortDirection?.name)
+          ? lastSortDirection.name
+          : "asc",
+      },
+    };
+  }
+
+  const otherKind = kind === "purchase" ? "name" : "purchase";
+  const nextDirections = {
+    purchase: ["asc", "desc"].includes(lastSortDirection?.purchase)
+      ? lastSortDirection.purchase
+      : "asc",
+    name: ["asc", "desc"].includes(lastSortDirection?.name)
+      ? lastSortDirection.name
+      : "asc",
+  };
+  const nextSort = {
+    purchase: ["asc", "desc", "off"].includes(sort?.purchase) ? sort.purchase : "asc",
+    name: ["asc", "desc", "off"].includes(sort?.name) ? sort.name : "off",
+    [kind]: mode,
+  };
+
+  if (mode === "off" && nextSort[otherKind] === "off") {
+    nextSort[otherKind] = nextDirections[otherKind];
+  } else if (mode !== "off") {
+    nextDirections[kind] = mode;
+  }
+
+  return {
+    sort: nextSort,
+    lastSortDirection: nextDirections,
+  };
+}
+
 export function sortItems(items, sort = { purchase: "asc", name: "off" }) {
   const result = [...items];
   const normalizedSort = normalizeSort(sort);
 
   if (normalizedSort.name !== "off") {
-    const direction = normalizedSort.name === "desc" ? -1 : 1;
+    const nameDirection = normalizedSort.name === "desc" ? -1 : 1;
+    const purchaseDirection = normalizedSort.purchase === "desc" ? -1 : 1;
     return result.sort((left, right) => {
-      const titleOrder = collator.compare(left.title, right.title) * direction;
+      const titleOrder = collator.compare(left.title, right.title) * nameDirection;
       if (titleOrder !== 0) return titleOrder;
-      return (left.globalOrder ?? Number.MAX_SAFE_INTEGER)
+      const purchaseOrder = (left.globalOrder ?? Number.MAX_SAFE_INTEGER)
         - (right.globalOrder ?? Number.MAX_SAFE_INTEGER);
+      return purchaseOrder * purchaseDirection;
     });
   }
 
@@ -98,20 +179,30 @@ export function sortItems(items, sort = { purchase: "asc", name: "off" }) {
   });
 }
 
-export function setItemFolderAssignment(items, folders, assignments, itemKey, folderId) {
-  const item = items.find((candidate) => candidate.key === itemKey);
-  if (!item) throw new Error("상품을 찾을 수 없어요.");
-
+export function setItemsFolderAssignment(items, folders, assignments, itemKeys, folderId) {
+  const uniqueKeys = [...new Set(Array.isArray(itemKeys) ? itemKeys : [])];
+  if (!uniqueKeys.length) throw new Error("옮길 상품을 선택해 주세요.");
+  const availableKeys = new Set(items.map((item) => item.key));
+  if (uniqueKeys.some((itemKey) => !availableKeys.has(itemKey))) {
+    throw new Error("상품을 찾을 수 없어요.");
+  }
   const normalizedFolderId = folderId || null;
   if (normalizedFolderId && !folders.some((folder) => folder.id === normalizedFolderId)) {
     throw new Error("폴더를 찾을 수 없어요.");
   }
 
+  const selectedKeys = new Set(uniqueKeys);
   const nextAssignments = Object.fromEntries(
-    Object.entries(assignments ?? {}).filter(([assignedItemKey]) => assignedItemKey !== itemKey),
+    Object.entries(assignments ?? {}).filter(([assignedItemKey]) => !selectedKeys.has(assignedItemKey)),
   );
-  if (normalizedFolderId) nextAssignments[itemKey] = normalizedFolderId;
+  if (normalizedFolderId) {
+    for (const itemKey of uniqueKeys) nextAssignments[itemKey] = normalizedFolderId;
+  }
   return nextAssignments;
+}
+
+export function setItemFolderAssignment(items, folders, assignments, itemKey, folderId) {
+  return setItemsFolderAssignment(items, folders, assignments, [itemKey], folderId);
 }
 
 export function folderDepth(folders, folderId) {

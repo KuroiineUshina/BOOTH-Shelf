@@ -28,6 +28,13 @@ function validItem(overrides = {}) {
     page: 2,
     orderOnPage: 3,
     globalOrder: 4,
+    downloadFiles: [
+      {
+        label: " avatar_package_v2.zip ",
+        detail: "42 MB",
+        url: "https://booth.pm/downloadables/7001?variation_id=31",
+      },
+    ],
     ...overrides,
   };
 }
@@ -66,7 +73,7 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
     lastSyncedAt: "not-a-date",
   });
 
-  assert.equal(sanitized.schemaVersion, 2);
+  assert.equal(sanitized.schemaVersion, 3);
   assert.equal("injected" in sanitized, false);
   assert.equal(sanitized.items.length, 1);
   assert.equal(sanitized.items[0].title, "안전한 상품");
@@ -76,6 +83,11 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
   assert.equal("extra" in sanitized.items[0], false);
   assert.equal(sanitized.items[0].key, "product:101");
   assert.deepEqual(sanitized.items[0].sources, ["purchased"]);
+  assert.deepEqual(sanitized.items[0].downloadFiles, [{
+    label: "avatar_package_v2.zip",
+    detail: "42 MB",
+  }]);
+  assert.equal("url" in sanitized.items[0].downloadFiles[0], false);
   assert.deepEqual(sanitized.favorites, ["product:101"]);
   assert.deepEqual(sanitized.assignments, { "product:101": "child" });
   assert.equal(sanitized.folders.some((folder) => folder.id === "__proto__"), false);
@@ -122,6 +134,28 @@ test("이전 버전의 같은 구매·기프트 상품과 정리 상태를 한 �
   assert.deepEqual(sanitized.assignments, { "product:101": "purchase-folder" });
 });
 
+test("무료 다운로드 출처와 라이브러리 위치를 보존한다", () => {
+  const sanitized = sanitizeState({
+    items: [
+      validItem({
+        key: "free:101",
+        source: "free",
+        sourcePageUrl: "https://accounts.booth.pm/library/free_downloads?page=5",
+        page: 5,
+      }),
+    ],
+    favorites: ["free:101"],
+  });
+
+  assert.equal(sanitized.items[0].key, "product:101");
+  assert.deepEqual(sanitized.items[0].sources, ["free"]);
+  assert.equal(
+    sanitized.items[0].sourcePageUrl,
+    "https://accounts.booth.pm/library/free_downloads?page=5",
+  );
+  assert.deepEqual(sanitized.favorites, ["product:101"]);
+});
+
 test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", async () => {
   replaceMemoryState({ items: [validItem()] });
   await savePreferences({ theme: "dark" });
@@ -143,8 +177,14 @@ test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", as
 });
 
 test("테마와 결제 합계 캐시는 허용된 값만 저장한다", () => {
-  assert.deepEqual(sanitizePreferences({ theme: "dark", injected: true }), { theme: "dark" });
-  assert.deepEqual(sanitizePreferences({ theme: "system" }), { theme: "light" });
+  assert.deepEqual(
+    sanitizePreferences({ theme: "dark", locale: "ja", injected: true }),
+    { theme: "dark", locale: "ja" },
+  );
+  assert.deepEqual(
+    sanitizePreferences({ theme: "system", locale: "invalid" }),
+    { theme: "light", locale: "auto" },
+  );
 
   const summary = sanitizeSpendingSummary({
     totals: { JPY: 1200, USD: 3.5, bad: 999, EUR: -1 },
