@@ -310,6 +310,29 @@ a {
   color: var(--solid-text);
 }
 
+.nav-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--ink-faint);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-row.is-active > .nav-icon {
+  color: var(--solid-text-muted);
+}
+
 .nav-count,
 .folder-count {
   min-width: 24px;
@@ -647,9 +670,63 @@ body.is-item-dragging .folder-row.is-drop-target > .folder-glyph {
 }
 
 .search-cluster {
+  position: relative;
   display: flex;
   width: min(700px, 100%);
   gap: 8px;
+}
+
+.search-suggestions {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 9px);
+  left: 0;
+  display: flex;
+  width: min(560px, calc(100vw - 100px));
+  min-height: 45px;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+.search-suggestions[hidden] {
+  display: none;
+}
+
+.search-suggestion-prompt {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.search-suggestion-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.search-suggestion-button {
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 750;
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.search-suggestion-button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-strong);
+  transform: translateY(-1px);
 }
 
 .search-box {
@@ -847,6 +924,75 @@ body.is-item-dragging .folder-row.is-drop-target > .folder-glyph {
   gap: 12px;
 }
 
+.sort-controls {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.sort-control {
+  display: grid;
+  min-width: 116px;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  transition: border-color 150ms ease, opacity 150ms ease, box-shadow 150ms ease;
+}
+
+.sort-control:focus-within {
+  border-color: rgba(236, 75, 83, 0.42);
+  box-shadow: 0 0 0 3px rgba(236, 75, 83, 0.07);
+}
+
+.sort-control.is-off {
+  opacity: 0.62;
+}
+
+.sort-control-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 3px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1;
+}
+
+.sort-control-icon {
+  display: inline-grid;
+  min-width: 17px;
+  place-items: center;
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.sort-name-icon {
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: -0.08em;
+}
+
+.sort-direction-select,
+.sort-direction-select select {
+  width: 100%;
+}
+
+.sort-direction-select select {
+  height: 34px;
+  padding-right: 28px;
+  padding-left: 9px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.sort-direction-select::after {
+  right: 9px;
+}
+
 .sync-meta {
   color: var(--ink-faint);
   font-size: 11px;
@@ -975,9 +1121,12 @@ body.is-item-dragging .folder-row.is-drop-target > .folder-glyph {
   position: relative;
   min-width: 0;
   perspective: 1400px;
+  transition: transform 180ms ease;
+}
+
+.item-card.is-initial-entry {
   animation: cardReveal 360ms cubic-bezier(0.2, 0.72, 0.25, 1) both;
   animation-delay: calc(var(--card-index, 0) * 24ms);
-  transition: transform 180ms ease;
 }
 
 .item-card:hover {
@@ -2078,6 +2227,7 @@ body { font-size: 16px; }
 .sidebar-label { font-size: 12px; }
 .nav-row,
 .folder-row { min-height: 44px; font-size: 14px; }
+.nav-icon { font-size: 16px; }
 .nav-count,
 .folder-count,
 .folder-actions button { font-size: 12px; }
@@ -2089,6 +2239,8 @@ body { font-size: 16px; }
 .privacy-note p,
 .privacy-clear-button { font-size: 12px; }
 .search-box input { font-size: 16px; }
+.search-suggestion-prompt { font-size: 13px; }
+.search-suggestion-button { font-size: 14px; }
 .search-shortcut,
 .field-select::after { font-size: 12px; }
 .field-select select,
@@ -2347,9 +2499,19 @@ body { font-size: 16px; }
     width: 100%;
   }
 
-  .sort-select,
-  .sort-select select {
+  .sort-controls {
     width: 100%;
+  }
+
+  .sort-control {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .search-suggestions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .result-toolbar {

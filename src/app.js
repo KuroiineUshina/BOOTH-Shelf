@@ -33,8 +33,11 @@ import {
   saveState,
 } from "./storage.js";
 import { startBoothDownload } from "./download.js";
+import { suggestAvatarSearchTerms } from "./search.js";
 
 const PAGE_SIZE = 48;
+const CARD_CACHE_LIMIT = PAGE_SIZE * 4;
+const CARD_LAYOUT_DURATION_MS = 260;
 const IS_DEMO = new URLSearchParams(window.location.search).has("demo");
 const STATE_LOCK_NAME = "booth-shelf-state-write";
 const SPENDING_LOCK_NAME = "booth-shelf-spending-scan";
@@ -50,7 +53,14 @@ const ui = {
   favoritesOnly: false,
   query: "",
   searchField: "all",
-  sort: "purchase",
+  sort: {
+    purchase: "asc",
+    name: "off",
+  },
+  lastSortDirection: {
+    purchase: "asc",
+    name: "asc",
+  },
   visibleLimit: PAGE_SIZE,
   selectedFolderId: null,
   folderDialogMode: null,
@@ -65,6 +75,7 @@ let preferences;
 let spendingSummary;
 let renderTimer;
 let dropSuccessTimer;
+let hasShownCards = false;
 let fallbackSaveQueue = Promise.resolve();
 const downloadCardStates = new Map();
 const itemDrag = {
@@ -82,8 +93,8 @@ const refs = Object.fromEntries(
     "favorites-nav", "add-root-folder", "all-folders", "unfiled-folder",
     "unfiled-count", "folder-drop-hint", "folder-tree", "folder-actions", "add-child-folder",
     "rename-folder", "move-folder", "delete-folder", "search-input",
-    "search-field", "sync-button", "view-eyebrow", "view-title",
-    "view-description", "last-sync", "sort-select", "sync-panel",
+    "search-field", "search-suggestions", "sync-button", "view-eyebrow", "view-title",
+    "view-description", "last-sync", "purchase-sort-select", "name-sort-select", "sync-panel",
     "sync-message", "sync-detail", "sync-progress", "login-link",
     "result-summary", "clear-filter", "item-grid", "empty-state",
     "empty-title", "empty-description", "empty-sync-button",
@@ -125,7 +136,7 @@ function demoState() {
     ["Warm Skin Materials", "Peach Lab", "purchased"],
     ["Quiet Cafe World", "Blue Hour", "purchased"],
     ["Ribbon Accessory Kit", "Fine Loop", "gift"],
-    ["Avatar Utility Box", "Mono Tools", "purchased"],
+    ["ミルティナ Casual Set", "Mono Tools", "purchased"],
   ];
 
   const items = samples.map(([title, sellerName, source], index) => ({
@@ -1104,13 +1115,141 @@ function hasActiveFilter() {
     || ui.source !== "all"
     || ui.folderId !== "all"
     || ui.favoritesOnly
-    || ui.sort !== "purchase";
+    || ui.sort.purchase !== "asc"
+    || ui.sort.name !== "off";
 }
 
-function renderItems() {
+function renderSearchSuggestions() {
+  const suggestions = suggestAvatarSearchTerms(ui.query, state.items, {
+    searchField: ui.searchField,
+  });
+  const container = refs["search-suggestions"];
+  container.hidden = suggestions.length === 0;
+
+  if (!suggestions.length) {
+    container.replaceChildren();
+    return;
+  }
+
+  const list = element("span", { className: "search-suggestion-list" });
+  for (const suggestion of suggestions) {
+    list.append(element("button", {
+      className: "search-suggestion-button",
+      text: suggestion,
+      attrs: {
+        type: "button",
+        "data-search-suggestion": suggestion,
+        "aria-label": `${suggestion}(으)로 검색`,
+      },
+    }));
+  }
+  container.replaceChildren(
+    element("span", { className: "search-suggestion-prompt", text: "이것을 찾으셨나요?" }),
+    list,
+  );
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+function settleCardAnimations(card) {
+  for (const animation of card.getAnimations()) {
+    try {
+      animation.commitStyles();
+    } catch {
+      // 이미 끝난 애니메이션은 현재 계산된 위치만 사용합니다.
+    }
+    animation.cancel();
+  }
+  const rect = card.getBoundingClientRect();
+  card.style.removeProperty("opacity");
+  card.style.removeProperty("transform");
+  card.classList.remove("is-initial-entry");
+  return rect;
+}
+
+function replaceCards(visible) {
+  const cards = visible.map(createCard);
+  if (!hasShownCards && cards.length) {
+    cards.forEach((card) => card.classList.add("is-initial-entry"));
+    hasShownCards = true;
+  }
+  refs["item-grid"].replaceChildren(...cards);
+}
+
+function reconcileCards(visible, { animateLayout = false } = {}) {
+  const grid = refs["item-grid"];
+  const existingCards = Array.from(grid.querySelectorAll(".item-card[data-item-key]"));
+  const existingByKey = new Map(existingCards.map((card) => [card.dataset.itemKey, card]));
+  const oldRects = new Map();
+
+  for (const card of existingCards) {
+    if (!card.hidden) oldRects.set(card, settleCardAnimations(card));
+  }
+
+  const desiredKeys = new Set(visible.map((item) => item.key));
+  for (const card of existingCards) {
+    if (!desiredKeys.has(card.dataset.itemKey)) card.hidden = true;
+  }
+
+  const desiredCards = visible.map((item, index) => {
+    const card = existingByKey.get(item.key) ?? createCard(item, index);
+    card.hidden = false;
+    card.style.setProperty("--card-index", String(Math.min(index, 12)));
+    grid.append(card);
+    return card;
+  });
+
+  const shouldAnimate = animateLayout && !prefersReducedMotion() && typeof Element.prototype.animate === "function";
+  if (shouldAnimate) {
+    grid.getBoundingClientRect();
+    for (const card of desiredCards) {
+      const nextRect = card.getBoundingClientRect();
+      const previousRect = oldRects.get(card);
+      if (previousRect?.width && nextRect.width) {
+        const deltaX = previousRect.left - nextRect.left;
+        const deltaY = previousRect.top - nextRect.top;
+        if (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5) {
+          card.animate(
+            [
+              { transform: `translate(${deltaX}px, ${deltaY}px)` },
+              { transform: "translate(0, 0)" },
+            ],
+            {
+              duration: CARD_LAYOUT_DURATION_MS,
+              easing: "cubic-bezier(0.2, 0.72, 0.25, 1)",
+            },
+          );
+        }
+      } else {
+        card.animate(
+          [
+            { opacity: 0, transform: "scale(0.965)" },
+            { opacity: 1, transform: "scale(1)" },
+          ],
+          {
+            duration: CARD_LAYOUT_DURATION_MS,
+            easing: "cubic-bezier(0.2, 0.72, 0.25, 1)",
+          },
+        );
+      }
+    }
+  }
+
+  const hiddenCards = Array.from(grid.querySelectorAll(".item-card[data-item-key][hidden]"));
+  hiddenCards.slice(CARD_CACHE_LIMIT).forEach((card) => card.remove());
+}
+
+function renderItems({ reconcile = false, animateLayout = false } = {}) {
   const results = currentResults();
   const visible = results.slice(0, ui.visibleLimit);
-  refs["item-grid"].replaceChildren(...visible.map(createCard));
+  const noStoredItems = state.items.length === 0;
+  const noResults = !noStoredItems && results.length === 0;
+
+  if (visible.length) refs["item-grid"].hidden = false;
+  if (reconcile) reconcileCards(visible, { animateLayout });
+  else replaceCards(visible);
 
   refs["result-summary"].replaceChildren(
     element("strong", { text: formatCount(results.length) }),
@@ -1119,8 +1258,6 @@ function renderItems() {
   refs["clear-filter"].hidden = !hasActiveFilter();
   refs["load-more-wrap"].hidden = results.length <= visible.length;
 
-  const noStoredItems = state.items.length === 0;
-  const noResults = !noStoredItems && results.length === 0;
   refs["empty-state"].hidden = !(noStoredItems || noResults);
   refs["item-grid"].hidden = noStoredItems || noResults;
 
@@ -1143,21 +1280,29 @@ function renderHeader() {
   refs["view-title"].textContent = copy.title;
   refs["view-description"].textContent = copy.description;
   refs["last-sync"].textContent = IS_DEMO ? "미리보기 데이터" : formatSyncTime(state.lastSyncedAt);
-  refs["sort-select"].value = ui.sort;
+  refs["purchase-sort-select"].value = ui.sort.purchase;
+  refs["name-sort-select"].value = ui.sort.name;
+  document.querySelector("[data-sort-control='purchase']")
+    ?.classList.toggle("is-off", ui.sort.purchase === "off");
+  document.querySelector("[data-sort-control='name']")
+    ?.classList.toggle("is-off", ui.sort.name === "off");
   refs["search-field"].value = ui.searchField;
   if (refs["search-input"].value !== ui.query) refs["search-input"].value = ui.query;
+  renderSearchSuggestions();
 }
 
-function render() {
+function render({ reconcileItems = false, animateItems = false } = {}) {
   renderNavigation();
   renderFolders();
   renderHeader();
-  renderItems();
+  renderItems({ reconcile: reconcileItems, animateLayout: animateItems });
 }
 
-function scheduleRender() {
+function scheduleResultRender() {
   window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(render, 90);
+  renderTimer = window.setTimeout(() => {
+    renderItems({ reconcile: true, animateLayout: true });
+  }, 90);
 }
 
 function setSource(source) {
@@ -1186,11 +1331,44 @@ function clearFilters() {
     favoritesOnly: false,
     query: "",
     searchField: "all",
-    sort: "purchase",
+    sort: {
+      purchase: "asc",
+      name: "off",
+    },
+    lastSortDirection: {
+      purchase: "asc",
+      name: "asc",
+    },
     selectedFolderId: null,
     visibleLimit: PAGE_SIZE,
   });
-  render();
+  render({ reconcileItems: true, animateItems: true });
+}
+
+function setSortMode(kind, mode) {
+  if (!["purchase", "name"].includes(kind) || !["off", "asc", "desc"].includes(mode)) return;
+  const otherKind = kind === "purchase" ? "name" : "purchase";
+
+  if (mode === "off") {
+    ui.sort = {
+      ...ui.sort,
+      [kind]: "off",
+      [otherKind]: ui.lastSortDirection[otherKind] || "asc",
+    };
+  } else {
+    ui.lastSortDirection = {
+      ...ui.lastSortDirection,
+      [kind]: mode,
+    };
+    ui.sort = {
+      purchase: kind === "purchase" ? mode : "off",
+      name: kind === "name" ? mode : "off",
+    };
+  }
+
+  resetResultWindow();
+  renderHeader();
+  renderItems({ reconcile: true, animateLayout: true });
 }
 
 function setSyncPanel({ message, detail = "", percent = 0, tone = "default", login = false, hidden = false }) {
@@ -1585,17 +1763,30 @@ function bindEvents() {
   refs["search-input"].addEventListener("input", (event) => {
     ui.query = event.target.value;
     resetResultWindow();
-    scheduleRender();
+    renderSearchSuggestions();
+    scheduleResultRender();
   });
   refs["search-field"].addEventListener("change", (event) => {
     ui.searchField = event.target.value;
     resetResultWindow();
-    render();
+    renderSearchSuggestions();
+    renderItems({ reconcile: true, animateLayout: true });
   });
-  refs["sort-select"].addEventListener("change", (event) => {
-    ui.sort = event.target.value;
+  refs["purchase-sort-select"].addEventListener("change", (event) => {
+    setSortMode("purchase", event.target.value);
+  });
+  refs["name-sort-select"].addEventListener("change", (event) => {
+    setSortMode("name", event.target.value);
+  });
+  refs["search-suggestions"].addEventListener("click", (event) => {
+    const button = event.target.closest("[data-search-suggestion]");
+    if (!button) return;
+    ui.query = button.dataset.searchSuggestion;
+    refs["search-input"].value = ui.query;
     resetResultWindow();
-    render();
+    renderSearchSuggestions();
+    renderItems({ reconcile: true, animateLayout: true });
+    refs["search-input"].focus();
   });
 
   refs["sync-button"].addEventListener("click", syncLibrary);
@@ -1603,7 +1794,7 @@ function bindEvents() {
   refs["clear-filter"].addEventListener("click", clearFilters);
   refs["load-more"].addEventListener("click", () => {
     ui.visibleLimit += PAGE_SIZE;
-    renderItems();
+    renderItems({ reconcile: true, animateLayout: true });
   });
 
   refs["item-grid"].addEventListener("click", (event) => {

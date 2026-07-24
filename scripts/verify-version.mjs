@@ -17,6 +17,7 @@ const packageJson = JSON.parse(packageText);
 const expectedVersion = tag ? tag.slice(1) : manifest.version;
 const versions = {
   manifest: manifest.version,
+  manifestVersionName: manifest.version_name,
   package: packageJson.version,
 };
 

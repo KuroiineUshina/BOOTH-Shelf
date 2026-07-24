@@ -1,3 +1,8 @@
+import {
+  buildSearchVariants,
+  normalizeSearchText,
+} from "./search.js";
+
 export const MAX_FOLDER_DEPTH = 3;
 
 const collator = new Intl.Collator(["ko", "ja", "en"], {
@@ -6,10 +11,7 @@ const collator = new Intl.Collator(["ko", "ja", "en"], {
 });
 
 export function normalizeText(value) {
-  return String(value ?? "")
-    .normalize("NFKC")
-    .toLocaleLowerCase()
-    .trim();
+  return normalizeSearchText(value);
 }
 
 export function itemHasSource(item, source) {
@@ -31,7 +33,7 @@ export function filterItems(items, filters = {}) {
     assignments = {},
   } = filters;
 
-  const normalizedQuery = normalizeText(query);
+  const queryVariants = buildSearchVariants(query);
   const favoriteSet = favorites instanceof Set ? favorites : new Set(favorites);
 
   return items.filter((item) => {
@@ -44,32 +46,54 @@ export function filterItems(items, filters = {}) {
       return false;
     }
 
-    if (!normalizedQuery) return true;
+    if (!queryVariants.length) return true;
 
-    const title = normalizeText(item.title);
-    const seller = normalizeText(item.sellerName);
+    const matchesQuery = (value) => {
+      const valueVariants = buildSearchVariants(value);
+      return queryVariants.some((queryVariant) => (
+        valueVariants.some((valueVariant) => valueVariant.includes(queryVariant))
+      ));
+    };
 
-    if (searchField === "title") return title.includes(normalizedQuery);
-    if (searchField === "seller") return seller.includes(normalizedQuery);
-    return title.includes(normalizedQuery) || seller.includes(normalizedQuery);
+    if (searchField === "title") return matchesQuery(item.title);
+    if (searchField === "seller") return matchesQuery(item.sellerName);
+    return matchesQuery(item.title) || matchesQuery(item.sellerName);
   });
 }
 
-export function sortItems(items, sort = "purchase") {
+function normalizeSort(sort) {
+  if (typeof sort === "string") {
+    if (sort === "title-asc") return { purchase: "off", name: "asc" };
+    if (sort === "title-desc") return { purchase: "off", name: "desc" };
+    if (sort === "purchase-desc") return { purchase: "desc", name: "off" };
+    return { purchase: "asc", name: "off" };
+  }
+
+  const purchase = ["asc", "desc", "off"].includes(sort?.purchase) ? sort.purchase : "asc";
+  const name = ["asc", "desc", "off"].includes(sort?.name) ? sort.name : "off";
+  if (purchase === "off" && name === "off") return { purchase: "asc", name: "off" };
+  return { purchase, name };
+}
+
+export function sortItems(items, sort = { purchase: "asc", name: "off" }) {
   const result = [...items];
+  const normalizedSort = normalizeSort(sort);
 
-  if (sort === "title-asc") {
-    return result.sort((left, right) => collator.compare(left.title, right.title));
+  if (normalizedSort.name !== "off") {
+    const direction = normalizedSort.name === "desc" ? -1 : 1;
+    return result.sort((left, right) => {
+      const titleOrder = collator.compare(left.title, right.title) * direction;
+      if (titleOrder !== 0) return titleOrder;
+      return (left.globalOrder ?? Number.MAX_SAFE_INTEGER)
+        - (right.globalOrder ?? Number.MAX_SAFE_INTEGER);
+    });
   }
 
-  if (sort === "title-desc") {
-    return result.sort((left, right) => collator.compare(right.title, left.title));
-  }
-
+  const direction = normalizedSort.purchase === "desc" ? -1 : 1;
   return result.sort((left, right) => {
     const sourceOrder = (left.globalOrder ?? Number.MAX_SAFE_INTEGER)
       - (right.globalOrder ?? Number.MAX_SAFE_INTEGER);
-    if (sourceOrder !== 0) return sourceOrder;
+    if (sourceOrder !== 0) return sourceOrder * direction;
     return collator.compare(left.title, right.title);
   });
 }

@@ -103,6 +103,10 @@ test("상품명·판매자·출처·즐겨찾기·폴더 필터를 조합한다"
 
   assert.deepEqual(filterItems(items, { query: "garden" }).map((item) => item.key), ["gift:2", "purchased:3"]);
   assert.deepEqual(filterItems(items, { query: "lumen", searchField: "seller" }).map((item) => item.key), ["purchased:1", "purchased:3"]);
+  assert.deepEqual(
+    filterItems([{ key: "avatar", title: "아바타 의상", sellerName: "상점" }], { query: "dkqkxk" }).map((item) => item.key),
+    ["avatar"],
+  );
   assert.deepEqual(filterItems(items, { source: "gift" }).map((item) => item.key), ["gift:2", "product:4"]);
   assert.deepEqual(filterItems(items, { source: "purchased" }).map((item) => item.key), ["purchased:1", "purchased:3", "product:4"]);
   assert.equal(itemHasSource(items[3], "gift"), true);
@@ -110,14 +114,26 @@ test("상품명·판매자·출처·즐겨찾기·폴더 필터를 조합한다"
   assert.deepEqual(filterItems(items, { folderId: "unfiled", assignments: { "gift:2": "world" } }).map((item) => item.key), ["purchased:1", "purchased:3", "product:4"]);
 });
 
-test("구매순과 이름 오름·내림차순을 정렬한다", () => {
+test("구매순과 이름순을 각각 오름·내림차순으로 정렬한다", () => {
   const items = [
     { key: "3", title: "상품 10", globalOrder: 2 },
     { key: "1", title: "상품 2", globalOrder: 0 },
     { key: "2", title: "Apple", globalOrder: 1 },
   ];
 
-  assert.deepEqual(sortItems(items, "purchase").map((item) => item.key), ["1", "2", "3"]);
-  assert.deepEqual(sortItems(items, "title-asc").map((item) => item.key), ["1", "3", "2"]);
-  assert.deepEqual(sortItems(items, "title-desc").map((item) => item.key), ["2", "3", "1"]);
+  assert.deepEqual(sortItems(items, { purchase: "asc", name: "off" }).map((item) => item.key), ["1", "2", "3"]);
+  assert.deepEqual(sortItems(items, { purchase: "desc", name: "off" }).map((item) => item.key), ["3", "2", "1"]);
+  assert.deepEqual(sortItems(items, { purchase: "off", name: "asc" }).map((item) => item.key), ["1", "3", "2"]);
+  assert.deepEqual(sortItems(items, { purchase: "off", name: "desc" }).map((item) => item.key), ["2", "3", "1"]);
+});
+
+test("두 정렬이 모두 꺼진 입력은 구매순 오름차순으로 복구한다", () => {
+  const items = [
+    { key: "later", title: "나중", globalOrder: 3 },
+    { key: "first", title: "먼저", globalOrder: 0 },
+  ];
+  assert.deepEqual(
+    sortItems(items, { purchase: "off", name: "off" }).map((item) => item.key),
+    ["first", "later"],
+  );
 });

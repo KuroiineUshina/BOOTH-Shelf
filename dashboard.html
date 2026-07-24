@@ -24,19 +24,23 @@
         <nav class="collection-nav" aria-labelledby="collection-heading">
           <p class="sidebar-label" id="collection-heading">컬렉션</p>
           <button class="nav-row is-active" type="button" data-source="all">
-            <span>전체 상품</span>
+            <span class="nav-icon" aria-hidden="true">▦</span>
+            <span class="nav-label">전체 상품</span>
             <span class="nav-count" id="all-count">0</span>
           </button>
           <button class="nav-row" type="button" data-source="purchased">
-            <span>구매한 상품</span>
+            <span class="nav-icon" aria-hidden="true">▣</span>
+            <span class="nav-label">구매한 상품</span>
             <span class="nav-count" id="purchased-count">0</span>
           </button>
           <button class="nav-row" type="button" data-source="gift">
-            <span>받은 기프트</span>
+            <span class="nav-icon" aria-hidden="true">◇</span>
+            <span class="nav-label">받은 기프트</span>
             <span class="nav-count" id="gift-count">0</span>
           </button>
           <button class="nav-row" type="button" id="favorites-nav">
-            <span>즐겨찾기</span>
+            <span class="nav-icon" aria-hidden="true">☆</span>
+            <span class="nav-label">즐겨찾기</span>
             <span class="nav-count" id="favorites-count">0</span>
           </button>
         </nav>
@@ -92,9 +96,9 @@
             <button class="privacy-clear-button" id="clear-local-data" type="button">저장 데이터 모두 삭제</button>
           </div>
         </div>
-        <p class="service-version" id="service-version" aria-label="정식 서비스 버전 1.0.1">
-          <span>정식 서비스</span>
-          <strong>v1.0.1</strong>
+        <p class="service-version" id="service-version" aria-label="버전 1.0.3">
+          <span>버전</span>
+          <strong>1.0.3</strong>
         </p>
       </aside>
 
@@ -124,6 +128,7 @@
                 <option value="seller">판매자명</option>
               </select>
             </label>
+            <div class="search-suggestions" id="search-suggestions" aria-live="polite" hidden></div>
           </div>
 
           <div class="topbar-actions">
@@ -151,14 +156,34 @@
 
           <div class="hero-meta">
             <div class="sync-meta" id="last-sync">아직 동기화하지 않았어요</div>
-            <label class="field-select sort-select">
-              <span class="sr-only">정렬 방식</span>
-              <select id="sort-select">
-                <option value="purchase">구매순</option>
-                <option value="title-asc">이름 오름차순</option>
-                <option value="title-desc">이름 내림차순</option>
-              </select>
-            </label>
+            <div class="sort-controls" role="group" aria-label="상품 정렬">
+              <label class="sort-control" data-sort-control="purchase">
+                <span class="sort-control-label">
+                  <span class="sort-control-icon" aria-hidden="true">↕</span>
+                  구매순
+                </span>
+                <span class="field-select sort-direction-select">
+                  <select id="purchase-sort-select" aria-label="구매순 정렬 방향">
+                    <option value="off">끄기</option>
+                    <option value="asc" selected>오름차순</option>
+                    <option value="desc">내림차순</option>
+                  </select>
+                </span>
+              </label>
+              <label class="sort-control is-off" data-sort-control="name">
+                <span class="sort-control-label">
+                  <span class="sort-control-icon sort-name-icon" aria-hidden="true">A↕</span>
+                  이름순
+                </span>
+                <span class="field-select sort-direction-select">
+                  <select id="name-sort-select" aria-label="이름순 정렬 방향">
+                    <option value="off" selected>끄기</option>
+                    <option value="asc">오름차순</option>
+                    <option value="desc">내림차순</option>
+                  </select>
+                </span>
+              </label>
+            </div>
           </div>
         </section>
 
