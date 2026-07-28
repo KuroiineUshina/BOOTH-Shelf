@@ -10,7 +10,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.0.5");
+  assert.equal(manifest.version, "1.0.6");
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.version_name, manifest.version);
   assert.deepEqual(manifest.permissions, ["storage"]);
@@ -59,7 +59,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(dashboard, /id="import-organization-data"/);
   assert.match(dashboard, /id="organization-backup-file"[^>]*accept="\.json,application\/json"/);
   assert.match(dashboard, /id="organization-restore-dialog"/);
-  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.5"/);
+  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.6"/);
   assert.match(dashboard, /id="theme-toggle"/);
   assert.match(dashboard, /id="red-pill-button"/);
   assert.match(dashboard, /id="red-pill-dialog"/);
@@ -171,6 +171,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(releaseWorkflow, /gh release view/);
   assert.match(releaseWorkflow, /--notes-file "\$notes_file"/);
   assert.match(releaseWorkflow, /gh release upload[^]*--clobber/);
+  assert.doesNotMatch(releaseWorkflow, /sha256sum|\.zip\.sha256/);
   assert.doesNotMatch(releaseWorkflow, /assets\/pretendard|assets\/ibm-plex|assets\/gmarket-sans/);
   assert.match(releaseNotes, /백업과 복원/);
   assert.match(releaseNotes, /원통형/);

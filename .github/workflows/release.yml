@@ -50,18 +50,12 @@ jobs:
           (
             cd dist
             zip -rq "$(basename "$archive")" booth-shelf
-            sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256"
           )
           (
             cd "$store_dir"
             zip -rq "../$(basename "$store_archive")" \
               manifest.json background.js dashboard.html styles.css assets src
           )
-          (
-            cd dist
-            sha256sum "$(basename "$store_archive")" > "$(basename "$store_archive").sha256"
-          )
-
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,9 +68,7 @@ jobs:
 
           assets=(
             "dist/booth-shelf-${GITHUB_REF_NAME}.zip"
-            "dist/booth-shelf-${GITHUB_REF_NAME}.zip.sha256"
             "dist/booth-shelf-chrome-web-store-${GITHUB_REF_NAME}.zip"
-            "dist/booth-shelf-chrome-web-store-${GITHUB_REF_NAME}.zip.sha256"
           )
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
