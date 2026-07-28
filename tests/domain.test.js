@@ -12,7 +12,9 @@ import {
   itemHasSource,
   matchingDownloadFiles,
   moveFolder,
+  reorderSortPriority,
   renameFolder,
+  setItemDownloadFiles,
   setItemFolderAssignment,
   setItemsFolderAssignment,
   sortItems,
@@ -172,6 +174,12 @@ test("아바타 별칭과 다운로드 파일명을 제안 없이 바로 검색�
       sellerName: "VISION TOKYO",
       downloadFiles: [{ label: "misaki_outfit.unitypackage", detail: "24 MB" }],
     },
+    {
+      key: "product:4",
+      title: "Stay Over Rose",
+      sellerName: "Another Shop",
+      downloadFiles: [{ label: "Stay_Over_Rose_Misaki.zip", detail: "BOOTH 다운로드" }],
+    },
   ];
 
   for (const query of ["Milltina", "밀티나", "ミルティナ"]) {
@@ -186,8 +194,39 @@ test("아바타 별칭과 다운로드 파일명을 제안 없이 바로 검색�
     ["Milltina_body_texture.psd"],
   );
   for (const query of ["Misaki", "미사키", "ミサキ", "みさき", "海咲"]) {
-    assert.deepEqual(filterItems(items, { query }).map((item) => item.key), ["product:3"], query);
+    assert.deepEqual(filterItems(items, { query }).map((item) => item.key), ["product:3", "product:4"], query);
   }
+  assert.deepEqual(
+    filterItems(items, { query: "misaki", searchField: "download" }).map((item) => item.key),
+    ["product:3", "product:4"],
+  );
+  assert.deepEqual(
+    matchingDownloadFiles(items[3], "misaki").map((file) => file.label),
+    ["Stay_Over_Rose_Misaki.zip"],
+  );
+});
+
+test("카드에서 새로 확인한 다운로드 파일명을 검색용 상품 데이터에 반영한다", () => {
+  const items = [{
+    key: "product:rose",
+    title: "Stay Over Rose",
+    sellerName: "Another Shop",
+    downloadFiles: [],
+  }];
+  const updated = setItemDownloadFiles(items, "product:rose", [
+    { label: "Stay_Over_Rose_Misaki.zip", detail: "24 MB", url: "https://booth.pm/downloadables/1" },
+    { label: "Stay_Over_Rose_Misaki.zip", detail: "24 MB", url: "https://booth.pm/downloadables/2" },
+  ]);
+
+  assert.notEqual(updated, items);
+  assert.deepEqual(updated[0].downloadFiles, [
+    { label: "Stay_Over_Rose_Misaki.zip", detail: "24 MB" },
+  ]);
+  assert.equal("url" in updated[0].downloadFiles[0], false);
+  assert.deepEqual(
+    filterItems(updated, { query: "misaki", searchField: "download" }).map((item) => item.key),
+    ["product:rose"],
+  );
 });
 
 test("구매순과 이름순을 각각 오름·내림차순으로 정렬한다", () => {
@@ -203,7 +242,7 @@ test("구매순과 이름순을 각각 오름·내림차순으로 정렬한다",
   assert.deepEqual(sortItems(items, { purchase: "off", name: "desc" }).map((item) => item.key), ["2", "3", "1"]);
 });
 
-test("구매순과 이름순을 동시에 켜면 이름순 뒤에 구매순을 적용한다", () => {
+test("구매순과 이름순을 동시에 켜면 지정한 우선순위대로 모두 적용한다", () => {
   const items = [
     { key: "b-first", title: "B", globalOrder: 0 },
     { key: "a-first", title: "A", globalOrder: 1 },
@@ -212,43 +251,73 @@ test("구매순과 이름순을 동시에 켜면 이름순 뒤에 구매순을 �
   ];
 
   assert.deepEqual(
-    sortItems(items, { purchase: "desc", name: "asc" }).map((item) => item.key),
+    sortItems(
+      items,
+      { purchase: "desc", name: "asc" },
+      ["name", "purchase"],
+    ).map((item) => item.key),
     ["a-later", "a-first", "b-first", "c"],
   );
   assert.deepEqual(
-    sortItems(items, { purchase: "asc", name: "desc" }).map((item) => item.key),
-    ["c", "b-first", "a-first", "a-later"],
+    sortItems(
+      items,
+      { purchase: "asc", name: "desc" },
+      ["purchase", "name"],
+    ).map((item) => item.key),
+    ["b-first", "a-first", "c", "a-later"],
   );
 });
 
-test("정렬 드롭다운은 둘 다 켤 수 있고 둘 다 꺼지는 것만 막는다", () => {
+test("정렬 드롭다운은 둘 다 켤 수 있고 드래그로 정한 우선순위를 유지한다", () => {
   const initial = {
     sort: { purchase: "asc", name: "off" },
     lastSortDirection: { purchase: "asc", name: "asc" },
+    sortPriority: ["purchase", "name"],
   };
   const bothEnabled = updateSortMode(
     initial.sort,
     initial.lastSortDirection,
     "name",
     "desc",
+    initial.sortPriority,
   );
   assert.deepEqual(bothEnabled.sort, { purchase: "asc", name: "desc" });
+  assert.deepEqual(bothEnabled.sortPriority, ["purchase", "name"]);
 
   const purchaseDisabled = updateSortMode(
     bothEnabled.sort,
     bothEnabled.lastSortDirection,
     "purchase",
     "off",
+    bothEnabled.sortPriority,
   );
   assert.deepEqual(purchaseDisabled.sort, { purchase: "off", name: "desc" });
+  assert.deepEqual(purchaseDisabled.sortPriority, ["purchase", "name"]);
 
   const attemptedBothOff = updateSortMode(
     purchaseDisabled.sort,
     purchaseDisabled.lastSortDirection,
     "name",
     "off",
+    purchaseDisabled.sortPriority,
   );
   assert.deepEqual(attemptedBothOff.sort, { purchase: "asc", name: "off" });
+  assert.deepEqual(attemptedBothOff.sortPriority, ["purchase", "name"]);
+});
+
+test("구매순과 이름순을 끌어 놓은 위치에 맞춰 우선순위를 바꾼다", () => {
+  assert.deepEqual(
+    reorderSortPriority(["purchase", "name"], "purchase", "name"),
+    ["name", "purchase"],
+  );
+  assert.deepEqual(
+    reorderSortPriority(["name", "purchase"], "purchase", "name"),
+    ["purchase", "name"],
+  );
+  assert.deepEqual(
+    reorderSortPriority(["name"], "missing", "purchase"),
+    ["name", "purchase"],
+  );
 });
 
 test("두 정렬이 모두 꺼진 입력은 구매순 오름차순으로 복구한다", () => {

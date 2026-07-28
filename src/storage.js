@@ -8,6 +8,8 @@ import {
 export const STORAGE_KEY = "boothShelfState";
 export const PREFERENCES_KEY = "boothShelfPreferences";
 export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
+export const ORGANIZATION_BACKUP_FORMAT = "booth-shelf-organization";
+export const ORGANIZATION_BACKUP_VERSION = 1;
 
 const MAX_STORED_ITEMS = 50_000;
 const MAX_ITEM_LOCATIONS = 256;
@@ -364,6 +366,69 @@ export function sanitizeState(value) {
     favorites,
     assignments,
     lastSyncedAt: cleanDate(state.lastSyncedAt),
+  };
+}
+
+export function createOrganizationBackup(value, exportedAt = new Date()) {
+  const state = sanitizeState(value);
+  const timestamp = exportedAt instanceof Date
+    ? (Number.isFinite(exportedAt.getTime()) ? exportedAt.toISOString() : null)
+    : cleanDate(exportedAt);
+  return {
+    format: ORGANIZATION_BACKUP_FORMAT,
+    version: ORGANIZATION_BACKUP_VERSION,
+    exportedAt: timestamp || new Date().toISOString(),
+    data: {
+      folders: state.folders.map((folder) => ({ ...folder })),
+      favorites: [...state.favorites],
+      assignments: { ...state.assignments },
+    },
+  };
+}
+
+export function restoreOrganizationBackup(currentValue, backupValue) {
+  if (!isRecord(backupValue)
+    || backupValue.format !== ORGANIZATION_BACKUP_FORMAT
+    || backupValue.version !== ORGANIZATION_BACKUP_VERSION
+    || !isRecord(backupValue.data)
+    || !Array.isArray(backupValue.data.folders)
+    || !Array.isArray(backupValue.data.favorites)
+    || !isRecord(backupValue.data.assignments)) {
+    throw new Error("BOOTH Shelf 정리 데이터 백업 파일이 아닙니다.");
+  }
+
+  const currentState = sanitizeState(currentValue);
+  const requestedFavorites = new Set(
+    backupValue.data.favorites.map(normalizeStoredItemKey).filter(Boolean),
+  );
+  const requestedAssignments = new Set(
+    Object.keys(backupValue.data.assignments).map(normalizeStoredItemKey).filter(Boolean),
+  );
+  if (!currentState.items.length && (requestedFavorites.size || requestedAssignments.size)) {
+    throw new Error("상품 배치를 복원하려면 먼저 라이브러리를 전체 동기화해 주세요.");
+  }
+
+  const restoredState = sanitizeState({
+    ...currentState,
+    folders: backupValue.data.folders,
+    favorites: backupValue.data.favorites,
+    assignments: backupValue.data.assignments,
+  });
+  const requestedItemKeys = new Set([...requestedFavorites, ...requestedAssignments]);
+  const restoredItemKeys = new Set([
+    ...restoredState.favorites,
+    ...Object.keys(restoredState.assignments),
+  ]);
+  return {
+    state: restoredState,
+    stats: {
+      folderCount: restoredState.folders.length,
+      favoriteCount: restoredState.favorites.length,
+      assignmentCount: Object.keys(restoredState.assignments).length,
+      skippedItemCount: [...requestedItemKeys]
+        .filter((itemKey) => !restoredItemKeys.has(itemKey))
+        .length,
+    },
   };
 }
 

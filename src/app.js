@@ -11,10 +11,10 @@ import {
   matchingDownloadFiles,
   moveFolder,
   renameFolder,
+  setItemDownloadFiles,
   setItemFolderAssignment,
   setItemsFolderAssignment,
   sortItems,
-  updateSortMode,
 } from "./domain.js";
 import {
   BoothAuthError,
@@ -27,9 +27,11 @@ import {
   SPENDING_SUMMARY_KEY,
   STORAGE_KEY,
   clearState,
+  createOrganizationBackup,
   loadPreferences,
   loadSpendingSummary,
   loadState,
+  restoreOrganizationBackup,
   restrictStorageAccess,
   savePreferences,
   saveSpendingSummary,
@@ -56,7 +58,9 @@ const BOOTH_HOST_PERMISSION = "https://accounts.booth.pm/*";
 const CARD_FLIP_FOCUS_DELAY_MS = 360;
 const DRAG_CLICK_SUPPRESSION_MS = 320;
 const POINTER_DRAG_THRESHOLD_PX = 7;
+const SORT_SWITCH_ROLL_DURATION_MS = 360;
 const DROP_SUCCESS_DURATION_MS = 760;
+const MAX_ORGANIZATION_BACKUP_BYTES = 2 * 1024 * 1024;
 const LOCALE_SEQUENCE = Object.freeze(["ko", "en", "ja"]);
 const LOCALE_NAMES = Object.freeze({
   ko: "한국어",
@@ -70,14 +74,8 @@ const ui = {
   favoritesOnly: false,
   query: "",
   searchField: "all",
-  sort: {
-    purchase: "asc",
-    name: "off",
-  },
-  lastSortDirection: {
-    purchase: "asc",
-    name: "asc",
-  },
+  sortKind: "purchase",
+  sortDirection: "asc",
   visibleLimit: PAGE_SIZE,
   selectedFolderId: null,
   folderDialogMode: null,
@@ -87,6 +85,7 @@ const ui = {
   calculatingSpending: false,
 };
 const selectedItemKeys = new Set();
+const sortSwitchAnimationTimers = new WeakMap();
 
 let state;
 let preferences;
@@ -96,6 +95,7 @@ let dropSuccessTimer;
 let loadMoreObserver;
 let themeSwitchFrame;
 let hasShownCards = false;
+let pendingOrganizationBackup = null;
 let fallbackSaveQueue = Promise.resolve();
 const downloadCardStates = new Map();
 const itemDrag = {
@@ -114,7 +114,6 @@ const itemDrag = {
   previewWidth: 0,
   previewHeight: 0,
 };
-
 const refs = Object.fromEntries(
   [
     "sidebar", "sidebar-close", "sidebar-open", "sidebar-backdrop",
@@ -123,7 +122,8 @@ const refs = Object.fromEntries(
     "unfiled-count", "folder-drop-hint", "folder-tree", "folder-actions", "add-child-folder",
     "rename-folder", "move-folder", "delete-folder", "search-input",
     "search-field", "sync-button", "view-eyebrow", "view-title",
-    "view-description", "last-sync", "purchase-sort-select", "name-sort-select", "sync-panel",
+    "view-description", "last-sync", "sort-kind-toggle", "sort-kind-icon",
+    "sort-kind-value", "sort-direction-toggle", "sort-direction-value", "sync-panel",
     "sync-message", "sync-detail", "sync-progress", "login-link",
     "result-summary", "selection-summary", "selection-count", "selection-clear",
     "clear-filter", "item-grid", "empty-state",
@@ -134,7 +134,11 @@ const refs = Object.fromEntries(
     "folder-parent-select", "folder-form-error", "folder-submit",
     "assign-dialog", "assign-form", "assign-item-name",
     "assign-folder-select", "confirm-dialog", "confirm-form", "confirm-copy",
-    "clear-local-data", "data-delete-dialog", "data-delete-form",
+    "clear-local-data", "organization-backup-actions",
+    "export-organization-data", "import-organization-data",
+    "organization-backup-file", "organization-restore-dialog",
+    "organization-restore-form", "organization-restore-summary",
+    "data-delete-dialog", "data-delete-form",
     "theme-toggle", "theme-toggle-icon", "language-toggle",
     "red-pill-button", "red-pill-dialog", "red-pill-intro",
     "red-pill-progress", "red-pill-progress-message", "red-pill-progress-detail",
@@ -505,6 +509,8 @@ async function calculateSpending() {
   refs["red-pill-button"].disabled = true;
   refs["sync-button"].disabled = true;
   refs["clear-local-data"].disabled = true;
+  refs["export-organization-data"].disabled = true;
+  refs["import-organization-data"].disabled = true;
   refs["red-pill-calculate"].textContent = t("계산 중…");
   setRedPillProgress({
     message: t("BOOTH 구매 내역 연결 중"),
@@ -547,6 +553,8 @@ async function calculateSpending() {
     refs["red-pill-button"].disabled = false;
     refs["sync-button"].disabled = false;
     refs["clear-local-data"].disabled = false;
+    refs["export-organization-data"].disabled = false;
+    refs["import-organization-data"].disabled = false;
     refs["red-pill-calculate"].textContent = t(spendingSummary ? "다시 계산" : "다시 시도");
   }
 }
@@ -1198,8 +1206,9 @@ function selectedItemsForDrag(originItemKey) {
     refs["item-grid"].querySelectorAll(".item-card[data-item-key]:not([hidden])"),
     (card) => card.dataset.itemKey,
   );
-  const itemKeys = selectedItemKeys.has(originItemKey)
-    ? renderedKeys.filter((itemKey) => selectedItemKeys.has(itemKey))
+  const renderedSelection = renderedKeys.filter((itemKey) => selectedItemKeys.has(itemKey));
+  const itemKeys = selectedItemKeys.size > 1 && renderedSelection.length
+    ? renderedSelection
     : [originItemKey];
   return itemKeys.map(findItem).filter(Boolean);
 }
@@ -1480,6 +1489,13 @@ async function revealDownloadOptions(itemKey, trigger) {
     if (downloadCardStates.get(itemKey) !== downloadState) return;
     downloadState.status = "ready";
     downloadState.options = options;
+    if (!IS_DEMO) {
+      const nextItems = setItemDownloadFiles(state.items, itemKey, options);
+      if (nextItems !== state.items) {
+        state = { ...state, items: nextItems };
+        await persistState();
+      }
+    }
   } catch (error) {
     if (downloadCardStates.get(itemKey) !== downloadState) return;
     downloadState.status = "error";
@@ -1537,7 +1553,11 @@ function currentResults() {
     favorites: state.favorites,
     assignments: state.assignments,
   });
-  return sortItems(filtered, ui.sort);
+  const sort = {
+    purchase: ui.sortKind === "purchase" ? ui.sortDirection : "off",
+    name: ui.sortKind === "name" ? ui.sortDirection : "off",
+  };
+  return sortItems(filtered, sort, [ui.sortKind]);
 }
 
 function hasActiveFilter() {
@@ -1546,8 +1566,8 @@ function hasActiveFilter() {
     || ui.source !== "all"
     || ui.folderId !== "all"
     || ui.favoritesOnly
-    || ui.sort.purchase !== "asc"
-    || ui.sort.name !== "off";
+    || ui.sortKind !== "purchase"
+    || ui.sortDirection !== "asc";
 }
 
 function prefersReducedMotion() {
@@ -1699,18 +1719,84 @@ function renderItems({ reconcile = false, animateLayout = false } = {}) {
   }
 }
 
-function renderHeader() {
+function setSortSwitchValue(
+  button,
+  valueElement,
+  nextLabel,
+  { animate = false, direction = "up" } = {},
+) {
+  const previousLabel = valueElement.textContent;
+  if (previousLabel === nextLabel) return;
+
+  const activeTimer = sortSwitchAnimationTimers.get(button);
+  if (activeTimer) window.clearTimeout(activeTimer);
+  button.querySelector(".sort-switch-outgoing")?.remove();
+  button.classList.remove("is-wheel-rolling");
+  valueElement.classList.remove("is-switch-incoming");
+
+  if (!animate || prefersReducedMotion()) {
+    valueElement.textContent = nextLabel;
+    return;
+  }
+
+  const outgoing = document.createElement("span");
+  outgoing.className = "sort-switch-value sort-switch-outgoing";
+  outgoing.textContent = previousLabel;
+  valueElement.textContent = nextLabel;
+  valueElement.classList.add("is-switch-incoming");
+  valueElement.parentElement.prepend(outgoing);
+  button.dataset.rollDirection = direction;
+  button.getBoundingClientRect();
+  button.classList.add("is-wheel-rolling");
+
+  const timer = window.setTimeout(() => {
+    outgoing.remove();
+    valueElement.classList.remove("is-switch-incoming");
+    button.classList.remove("is-wheel-rolling");
+    delete button.dataset.rollDirection;
+    sortSwitchAnimationTimers.delete(button);
+  }, SORT_SWITCH_ROLL_DURATION_MS);
+  sortSwitchAnimationTimers.set(button, timer);
+}
+
+function renderHeader({ animateSortSwitch = null } = {}) {
   const copy = getViewCopy();
   refs["view-eyebrow"].textContent = copy.eyebrow;
   refs["view-title"].textContent = copy.title;
   refs["view-description"].textContent = copy.description;
   refs["last-sync"].textContent = IS_DEMO ? t("미리보기 데이터") : formatSyncTime(state.lastSyncedAt);
-  refs["purchase-sort-select"].value = ui.sort.purchase;
-  refs["name-sort-select"].value = ui.sort.name;
-  document.querySelector("[data-sort-control='purchase']")
-    ?.classList.toggle("is-off", ui.sort.purchase === "off");
-  document.querySelector("[data-sort-control='name']")
-    ?.classList.toggle("is-off", ui.sort.name === "off");
+  const kindLabel = t(ui.sortKind === "purchase" ? "구매순" : "이름순");
+  const directionLabel = t(ui.sortDirection === "asc" ? "오름차순" : "내림차순");
+  setSortSwitchValue(
+    refs["sort-kind-toggle"],
+    refs["sort-kind-value"],
+    kindLabel,
+    {
+      animate: animateSortSwitch === "kind",
+      direction: ui.sortKind === "name" ? "up" : "down",
+    },
+  );
+  refs["sort-kind-icon"].className = `sort-switch-icon licon ${
+    ui.sortKind === "purchase" ? "licon-shopping-bag" : "licon-arrow-down-a-z"
+  }`;
+  refs["sort-kind-toggle"].setAttribute(
+    "aria-label",
+    t("정렬 기준 변경: 현재 {value}", { value: kindLabel }),
+  );
+  setSortSwitchValue(
+    refs["sort-direction-toggle"],
+    refs["sort-direction-value"],
+    directionLabel,
+    {
+      animate: animateSortSwitch === "direction",
+      direction: ui.sortDirection === "desc" ? "up" : "down",
+    },
+  );
+  refs["sort-direction-toggle"].dataset.direction = ui.sortDirection;
+  refs["sort-direction-toggle"].setAttribute(
+    "aria-label",
+    t("정렬 방향 변경: 현재 {value}", { value: directionLabel }),
+  );
   refs["search-field"].value = ui.searchField;
   if (refs["search-input"].value !== ui.query) refs["search-input"].value = ui.query;
 }
@@ -1784,28 +1870,28 @@ function clearFilters() {
     favoritesOnly: false,
     query: "",
     searchField: "all",
-    sort: {
-      purchase: "asc",
-      name: "off",
-    },
-    lastSortDirection: {
-      purchase: "asc",
-      name: "asc",
-    },
+    sortKind: "purchase",
+    sortDirection: "asc",
     selectedFolderId: null,
     visibleLimit: PAGE_SIZE,
   });
   render({ reconcileItems: true, animateItems: true });
 }
 
-function setSortMode(kind, mode) {
-  const next = updateSortMode(ui.sort, ui.lastSortDirection, kind, mode);
-  ui.sort = next.sort;
-  ui.lastSortDirection = next.lastSortDirection;
-
+function applySortSwitchChange(target) {
   resetResultWindow();
-  renderHeader();
+  renderHeader({ animateSortSwitch: target });
   renderItems({ reconcile: true, animateLayout: true });
+}
+
+function toggleSortKind() {
+  ui.sortKind = ui.sortKind === "purchase" ? "name" : "purchase";
+  applySortSwitchChange("kind");
+}
+
+function toggleSortDirection() {
+  ui.sortDirection = ui.sortDirection === "asc" ? "desc" : "asc";
+  applySortSwitchChange("direction");
 }
 
 function setSyncPanel({ message, detail = "", percent = 0, tone = "default", login = false, hidden = false }) {
@@ -1858,6 +1944,8 @@ async function syncLibrary() {
   refs["sync-button"].disabled = true;
   refs["red-pill-button"].disabled = true;
   refs["clear-local-data"].disabled = true;
+  refs["export-organization-data"].disabled = true;
+  refs["import-organization-data"].disabled = true;
   refs["sync-button"].classList.add("is-syncing");
   setSyncPanel({
     message: t("라이브러리 연결 중"),
@@ -1934,6 +2022,8 @@ async function syncLibrary() {
     refs["sync-button"].disabled = false;
     refs["red-pill-button"].disabled = false;
     refs["clear-local-data"].disabled = false;
+    refs["export-organization-data"].disabled = false;
+    refs["import-organization-data"].disabled = false;
     refs["sync-button"].classList.remove("is-syncing");
   }
 }
@@ -1944,6 +2034,119 @@ function openDataDeleteConfirmation() {
     return;
   }
   refs["data-delete-dialog"].showModal();
+}
+
+function organizationDataActionBlocked() {
+  if (!ui.syncing && !ui.calculatingSpending) return false;
+  showToast(t("진행 중인 작업이 끝난 뒤 정리 데이터를 백업하거나 복원해 주세요."), "error");
+  return true;
+}
+
+function exportOrganizationData() {
+  if (organizationDataActionBlocked()) return;
+
+  try {
+    const backup = createOrganizationBackup(state);
+    const blob = new Blob([`${JSON.stringify(backup, null, 2)}\n`], {
+      type: "application/json;charset=utf-8",
+    });
+    const now = new Date();
+    const date = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+    const objectUrl = URL.createObjectURL(blob);
+    const download = element("a", {
+      attrs: {
+        href: objectUrl,
+        download: `booth-shelf-organization-${date}.json`,
+      },
+    });
+    document.body.append(download);
+    download.click();
+    download.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    showToast(t("정리 데이터 백업 파일을 저장했어요."));
+  } catch (error) {
+    showToast(t("정리 데이터 백업을 만들지 못했어요: {message}", {
+      message: error?.message || t("알 수 없는 오류"),
+    }), "error");
+  }
+}
+
+function chooseOrganizationBackup() {
+  if (organizationDataActionBlocked()) return;
+  refs["organization-backup-file"].value = "";
+  refs["organization-backup-file"].click();
+}
+
+async function prepareOrganizationRestore(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+
+  try {
+    if (file.size > MAX_ORGANIZATION_BACKUP_BYTES) {
+      throw new Error(t("백업 파일은 2MB 이하여야 합니다."));
+    }
+    const content = (await file.text()).replace(/^\uFEFF/u, "");
+    const backup = JSON.parse(content);
+    const preview = restoreOrganizationBackup(state, backup);
+    pendingOrganizationBackup = backup;
+    const summary = t("{folders}개 폴더, {assignments}개 상품 배치, {favorites}개 즐겨찾기를 복원합니다.", {
+      folders: formatCount(preview.stats.folderCount),
+      assignments: formatCount(preview.stats.assignmentCount),
+      favorites: formatCount(preview.stats.favoriteCount),
+    });
+    const skipped = preview.stats.skippedItemCount
+      ? ` ${t("{count}개 상품은 현재 라이브러리에 없어 건너뜁니다.", {
+        count: formatCount(preview.stats.skippedItemCount),
+      })}`
+      : "";
+    refs["organization-restore-summary"].textContent = `${summary}${skipped}`;
+    refs["organization-restore-dialog"].showModal();
+  } catch (error) {
+    pendingOrganizationBackup = null;
+    showToast(t("백업 파일을 읽지 못했어요: {message}", {
+      message: t(error?.message || "알 수 없는 오류"),
+    }), "error");
+  }
+}
+
+async function confirmOrganizationRestore(event) {
+  event.preventDefault();
+  if (!pendingOrganizationBackup) {
+    refs["organization-restore-dialog"].close();
+    return;
+  }
+
+  const submitButton = refs["organization-restore-form"].querySelector('[type="submit"]');
+  const backup = pendingOrganizationBackup;
+  submitButton.disabled = true;
+
+  try {
+    await fallbackSaveQueue;
+    await runWithStateLock(async () => {
+      const latestState = await loadState();
+      const restored = restoreOrganizationBackup(latestState, backup);
+      state = await saveState(restored.state);
+    });
+    pendingOrganizationBackup = null;
+    selectedItemKeys.clear();
+    ui.folderId = "all";
+    ui.selectedFolderId = null;
+    resetResultWindow();
+    refs["organization-restore-dialog"].close();
+    render({ reconcileItems: true, animateItems: true });
+    showToast(t("정리 데이터를 복원했어요."));
+  } catch (error) {
+    showToast(t("정리 데이터를 복원하지 못했어요: {message}", {
+      message: t(error?.message || "알 수 없는 오류"),
+    }), "error");
+  } finally {
+    submitButton.disabled = false;
+  }
 }
 
 async function confirmDataDelete(event) {
@@ -2247,6 +2450,9 @@ function bindEvents() {
   refs["move-folder"].addEventListener("click", () => openFolderDialog("move"));
   refs["delete-folder"].addEventListener("click", openDeleteConfirmation);
   refs["clear-local-data"].addEventListener("click", openDataDeleteConfirmation);
+  refs["export-organization-data"].addEventListener("click", exportOrganizationData);
+  refs["import-organization-data"].addEventListener("click", chooseOrganizationBackup);
+  refs["organization-backup-file"].addEventListener("change", prepareOrganizationRestore);
 
   refs["search-input"].addEventListener("input", (event) => {
     ui.query = event.target.value;
@@ -2258,12 +2464,8 @@ function bindEvents() {
     resetResultWindow();
     renderItems({ reconcile: true, animateLayout: true });
   });
-  refs["purchase-sort-select"].addEventListener("change", (event) => {
-    setSortMode("purchase", event.target.value);
-  });
-  refs["name-sort-select"].addEventListener("change", (event) => {
-    setSortMode("name", event.target.value);
-  });
+  refs["sort-kind-toggle"].addEventListener("click", toggleSortKind);
+  refs["sort-direction-toggle"].addEventListener("click", toggleSortDirection);
   refs["sync-button"].addEventListener("click", syncLibrary);
   refs["empty-sync-button"].addEventListener("click", syncLibrary);
   refs["clear-filter"].addEventListener("click", clearFilters);
@@ -2313,7 +2515,11 @@ function bindEvents() {
   refs["folder-form"].addEventListener("submit", submitFolderForm);
   refs["assign-form"].addEventListener("submit", submitAssignment);
   refs["confirm-form"].addEventListener("submit", confirmDelete);
+  refs["organization-restore-form"].addEventListener("submit", confirmOrganizationRestore);
   refs["data-delete-form"].addEventListener("submit", confirmDataDelete);
+  refs["organization-restore-dialog"].addEventListener("close", () => {
+    pendingOrganizationBackup = null;
+  });
 
   document.querySelectorAll("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => document.getElementById(button.dataset.closeDialog).close());
@@ -2370,6 +2576,7 @@ async function init() {
     preferences = await loadPreferences();
     spendingSummary = null;
     refs["clear-local-data"].hidden = true;
+    refs["organization-backup-actions"].hidden = true;
   } else {
     await restrictStorageAccess();
     [state, preferences, spendingSummary] = await Promise.all([

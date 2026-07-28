@@ -1,6 +1,6 @@
 {
   "name": "booth-shelf-extension",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "type": "module",
   "description": "BOOTH 라이브러리·기프트·무료 다운로드를 검색하고 정리하는 Chromium 확장프로그램",

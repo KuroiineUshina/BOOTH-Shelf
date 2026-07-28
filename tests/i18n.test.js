@@ -29,9 +29,17 @@ test("UI 문구와 변수 자리를 선택한 언어로 번역한다", () => {
     t("{count}개 상품을 놓을 폴더를 선택하세요", { count: 3 }),
     "Choose a folder for 3 items",
   );
+  assert.equal(
+    t("정렬 기준 변경: 현재 {value}", { value: "Purchase order" }),
+    "Change sort criterion: currently Purchase order",
+  );
 
   setLocale("ja");
   assert.equal(t("무료 상품"), "無料ダウンロード");
+  assert.equal(
+    t("정렬 방향 변경: 현재 {value}", { value: "昇順" }),
+    "並び替え方向を変更：現在は昇順",
+  );
   assert.equal(
     t("언어 변경: 현재 {current}, 다음 {next}", { current: "日本語", next: "한국어" }),
     "言語を変更：現在は日本語、次は한국어",

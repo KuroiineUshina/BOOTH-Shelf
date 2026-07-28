@@ -10,7 +10,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.0.4");
+  assert.equal(manifest.version, "1.0.5");
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.version_name, manifest.version);
   assert.deepEqual(manifest.permissions, ["storage"]);
@@ -32,6 +32,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     "src/avatar-aliases.js",
     "src/i18n.js",
     "src/search.js",
+    "src/storage.js",
     "src/urls.js",
     "assets/lucide/lucide.woff2",
     "assets/lucide/LICENSE",
@@ -54,12 +55,16 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const dashboard = await readFile(path.join(root, "dashboard.html"), "utf8");
   assert.match(dashboard, /id="clear-local-data"/);
   assert.match(dashboard, /id="data-delete-dialog"/);
-  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.4"/);
+  assert.match(dashboard, /id="export-organization-data"/);
+  assert.match(dashboard, /id="import-organization-data"/);
+  assert.match(dashboard, /id="organization-backup-file"[^>]*accept="\.json,application\/json"/);
+  assert.match(dashboard, /id="organization-restore-dialog"/);
+  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.5"/);
   assert.match(dashboard, /id="theme-toggle"/);
   assert.match(dashboard, /id="red-pill-button"/);
   assert.match(dashboard, /id="red-pill-dialog"/);
-  assert.match(dashboard, /id="purchase-sort-select"/);
-  assert.match(dashboard, /id="name-sort-select"/);
+  assert.match(dashboard, /id="sort-kind-toggle"/);
+  assert.match(dashboard, /id="sort-direction-toggle"/);
   assert.match(dashboard, /<option value="download">파일명<\/option>/);
   assert.match(dashboard, /id="selection-summary"/);
   assert.match(dashboard, /data-source="free"/);
@@ -96,8 +101,8 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     readFile(path.join(root, "assets/m-plus-1/OFL.txt"), "utf8"),
     readFile(path.join(root, "assets/kofi/kofi-cup.png")),
     readFile(path.join(root, ".github/workflows/release.yml"), "utf8"),
-    readFile(path.join(root, "store-assets/RELEASE_NOTES_1.0.4.md"), "utf8"),
-    readFile(path.join(root, "store-assets/TWITTER_POST_1.0.4.md"), "utf8"),
+    readFile(path.join(root, "store-assets/RELEASE_NOTES_1.0.5.md"), "utf8"),
+    readFile(path.join(root, "store-assets/TWITTER_POST_1.0.5.md"), "utf8"),
   ]);
   const legacyIconGlyphs = /[×▦▣◇☆★＋▰▱□♥↗☰⌕☀☾↻↕←↓›]/u;
   assert.doesNotMatch(`${dashboard}\n${app}`, legacyIconGlyphs);
@@ -112,6 +117,17 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(app, /const POINTER_DRAG_THRESHOLD_PX = 7/);
   assert.match(app, /function handleItemPointerMove\(event\)/);
   assert.match(app, /document\.elementFromPoint\(event\.clientX, event\.clientY\)/);
+  assert.match(dashboard, /id="sort-kind-toggle"/);
+  assert.match(dashboard, /id="sort-direction-toggle"/);
+  assert.doesNotMatch(dashboard, /data-sort-drag-handle|purchase-sort-select|name-sort-select/);
+  assert.match(app, /function toggleSortKind\(\)/);
+  assert.match(app, /function toggleSortDirection\(\)/);
+  assert.match(app, /function setSortSwitchValue\(/);
+  assert.match(app, /refs\["sort-kind-toggle"\]\.addEventListener\("click", toggleSortKind\)/);
+  assert.match(styles, /\.sort-switch\s*\{/);
+  assert.match(styles, /@keyframes sortWheelOutUp/);
+  assert.match(styles, /@keyframes sortWheelInDown/);
+  assert.doesNotMatch(styles, /\.sort-control\.is-sort-dragging/);
   assert.match(app, /function cloneCardFrontForDrag\(item\)/);
   assert.match(app, /front\.cloneNode\(true\)/);
   assert.match(app, /event\.clientX - itemDrag\.pointerOffsetX/);
@@ -121,6 +137,8 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(app, /classList\.toggle\("is-over-sidebar", horizontalOverlap > 0\)/);
   assert.match(app, /clearSelection: draggedCurrentSelection/);
   assert.match(app, /if \(clearSelection\) selectedItemKeys\.clear\(\)/);
+  assert.match(app, /const renderedSelection = renderedKeys\.filter\(\(itemKey\) => selectedItemKeys\.has\(itemKey\)\)/);
+  assert.match(app, /selectedItemKeys\.size > 1 && renderedSelection\.length/);
   assert.match(styles, /@keyframes dragPreviewGather/);
   assert.match(styles, /\.item-drag-preview\.is-over-sidebar \.item-drag-preview-cluster\s*\{[^}]*opacity:\s*0\.75;[^}]*transform:\s*scale\(0\.75\)/s);
   assert.match(styles, /\.item-drag-preview-cluster\s*\{[^}]*opacity 240ms[^}]*transform 240ms/s);
@@ -149,9 +167,14 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(mPlusLicense, /SIL OPEN FONT LICENSE Version 1\.1/);
   assert.equal(kofiPng[25], 6, "Ko-fi PNG should include an alpha channel");
   assert.match(releaseWorkflow, /assets\/lucide assets\/kofi assets\/paperlogy assets\/m-plus-1/);
+  assert.match(releaseWorkflow, /RELEASE_NOTES_\$\{version\}\.md/);
+  assert.match(releaseWorkflow, /gh release view/);
+  assert.match(releaseWorkflow, /--notes-file "\$notes_file"/);
+  assert.match(releaseWorkflow, /gh release upload[^]*--clobber/);
   assert.doesNotMatch(releaseWorkflow, /assets\/pretendard|assets\/ibm-plex|assets\/gmarket-sans/);
-  assert.match(releaseNotes, /68개 주요 아바타/);
-  assert.match(releaseNotes, /Paperlogy/);
+  assert.match(releaseNotes, /백업과 복원/);
+  assert.match(releaseNotes, /원통형/);
+  assert.match(releaseNotes, /Misaki/);
   assert.match(twitterPost, /#BOOTH_Shelf/);
   assert.match(twitterPost, /chromewebstore\.google\.com\/detail\/aibjhdieagkjmcodaiopaklonjbdmbpj/);
   assert.doesNotMatch(twitterPost, /Shift 다중선택|^#BOOTH$/m);
@@ -162,8 +185,16 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(app, /actions\.append\(assignButton, favoriteButton\)/);
   assert.match(app, /const LOCALE_SEQUENCE = Object\.freeze\(\["ko", "en", "ja"\]\)/);
   assert.match(app, /refs\["language-toggle"\]\.addEventListener\("click"/);
+  assert.match(app, /function exportOrganizationData\(\)/);
+  assert.match(app, /function prepareOrganizationRestore\(event\)/);
+  assert.match(app, /function confirmOrganizationRestore\(event\)/);
+  assert.match(app, /download: `booth-shelf-organization-\$\{date\}\.json`/);
   assert.match(styles, /\.licon-languages::before \{ content: "\\e0fe"; \}/);
   assert.match(styles, /html\.is-theme-switching[\s\S]*transition:\s*none !important/);
+  assert.match(styles, /\.download-option-list\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);[^}]*overflow-x:\s*hidden;/s);
+  assert.match(styles, /\.download-option\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s);
+  assert.match(styles, /\.download-option-copy\s*\{[^}]*min-width:\s*0;[^}]*flex:\s*1 1 0;[^}]*overflow:\s*hidden;/s);
+  assert.match(styles, /\.download-option-arrow\s*\{[^}]*width:\s*25px;[^}]*flex:\s*0 0 25px;[^}]*margin-left:\s*auto;/s);
 
   const supportLink = dashboard.match(/<a(?=[^>]*class="support-link")[^>]*>/)?.[0];
   assert.ok(supportLink, "Ko-fi 후원 링크가 있어야 한다");

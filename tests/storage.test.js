@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   clearState,
+  createOrganizationBackup,
   loadPreferences,
   loadSpendingSummary,
   loadState,
@@ -12,6 +13,7 @@ import {
   savePreferences,
   saveSpendingSummary,
   sanitizeState,
+  restoreOrganizationBackup,
 } from "../src/storage.js";
 
 function validItem(overrides = {}) {
@@ -154,6 +156,79 @@ test("무료 다운로드 출처와 라이브러리 위치를 보존한다", () 
     "https://accounts.booth.pm/library/free_downloads?page=5",
   );
   assert.deepEqual(sanitized.favorites, ["product:101"]);
+});
+
+test("정리 데이터 백업은 상품 목록 없이 폴더·배치·즐겨찾기만 내보낸다", () => {
+  const backup = createOrganizationBackup({
+    items: [validItem()],
+    folders: [{ id: "avatar", name: "아바타", parentId: null, order: 0 }],
+    favorites: ["purchased:101"],
+    assignments: { "purchased:101": "avatar" },
+    lastSyncedAt: "2026-07-27T00:00:00.000Z",
+  }, new Date("2026-07-27T01:02:03.000Z"));
+
+  assert.equal(backup.format, "booth-shelf-organization");
+  assert.equal(backup.version, 1);
+  assert.equal(backup.exportedAt, "2026-07-27T01:02:03.000Z");
+  assert.equal("items" in backup.data, false);
+  assert.equal("lastSyncedAt" in backup.data, false);
+  assert.deepEqual(backup.data.favorites, ["product:101"]);
+  assert.deepEqual(backup.data.assignments, { "product:101": "avatar" });
+});
+
+test("정리 데이터 복원은 현재 상품 목록을 보존하고 일치하는 상품만 연결한다", () => {
+  const current = sanitizeState({
+    items: [validItem()],
+    folders: [{ id: "old", name: "이전 폴더", parentId: null, order: 0 }],
+    favorites: [],
+    assignments: {},
+    lastSyncedAt: "2026-07-27T00:00:00.000Z",
+  });
+  const restored = restoreOrganizationBackup(current, {
+    format: "booth-shelf-organization",
+    version: 1,
+    exportedAt: "2026-07-27T01:02:03.000Z",
+    data: {
+      folders: [{ id: "avatar", name: "아바타", parentId: null, order: 0 }],
+      favorites: ["product:101", "product:999"],
+      assignments: {
+        "product:101": "avatar",
+        "product:999": "avatar",
+      },
+    },
+  });
+
+  assert.equal(restored.state.items.length, 1);
+  assert.equal(restored.state.items[0].productId, "101");
+  assert.equal(restored.state.lastSyncedAt, "2026-07-27T00:00:00.000Z");
+  assert.deepEqual(restored.state.folders.map((folder) => folder.id), ["avatar"]);
+  assert.deepEqual(restored.state.favorites, ["product:101"]);
+  assert.deepEqual(restored.state.assignments, { "product:101": "avatar" });
+  assert.deepEqual(restored.stats, {
+    folderCount: 1,
+    favoriteCount: 1,
+    assignmentCount: 1,
+    skippedItemCount: 1,
+  });
+});
+
+test("정리 데이터 복원은 형식 오류와 동기화 전 상품 배치를 차단한다", () => {
+  assert.throws(
+    () => restoreOrganizationBackup(sanitizeState({}), { format: "not-a-backup" }),
+    /백업 파일이 아닙니다/,
+  );
+  assert.throws(
+    () => restoreOrganizationBackup(sanitizeState({}), {
+      format: "booth-shelf-organization",
+      version: 1,
+      data: {
+        folders: [],
+        favorites: ["product:101"],
+        assignments: {},
+      },
+    }),
+    /먼저 라이브러리를 전체 동기화/,
+  );
 });
 
 test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", async () => {

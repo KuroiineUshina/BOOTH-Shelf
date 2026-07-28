@@ -58,6 +58,49 @@ export function matchingDownloadFiles(item, query) {
     .map(({ file }) => file);
 }
 
+function normalizeDownloadFileMetadata(file) {
+  const label = String(file?.label || "").replace(/\s+/gu, " ").trim().slice(0, 240);
+  if (!label) return null;
+  return {
+    label,
+    detail: String(file?.detail || "").replace(/\s+/gu, " ").trim().slice(0, 120),
+  };
+}
+
+export function setItemDownloadFiles(items, itemKey, files) {
+  const itemIndex = items.findIndex((item) => item.key === itemKey);
+  if (itemIndex < 0) throw new Error("상품을 찾을 수 없어요.");
+
+  const seen = new Set();
+  const nextFiles = [];
+  for (const file of Array.isArray(files) ? files : []) {
+    const normalized = normalizeDownloadFileMetadata(file);
+    if (!normalized) continue;
+    const signature = `${normalizeSearchText(normalized.label)}\u0000${normalizeSearchText(normalized.detail)}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    nextFiles.push(normalized);
+  }
+
+  const currentFiles = (Array.isArray(items[itemIndex].downloadFiles)
+    ? items[itemIndex].downloadFiles
+    : [])
+    .map(normalizeDownloadFileMetadata)
+    .filter(Boolean);
+  const unchanged = currentFiles.length === nextFiles.length
+    && currentFiles.every((file, index) => (
+      file.label === nextFiles[index].label && file.detail === nextFiles[index].detail
+    ));
+  if (unchanged) return items;
+
+  const nextItems = [...items];
+  nextItems[itemIndex] = {
+    ...items[itemIndex],
+    downloadFiles: nextFiles,
+  };
+  return nextItems;
+}
+
 export function filterItems(items, filters = {}) {
   const {
     query = "",
@@ -112,10 +155,42 @@ function normalizeSort(sort) {
   return { purchase, name };
 }
 
-export function updateSortMode(sort, lastSortDirection, kind, mode) {
+const SORT_KINDS = Object.freeze(["purchase", "name"]);
+
+function normalizeSortPriority(priority) {
+  const requestedKinds = Array.isArray(priority) ? priority : SORT_KINDS;
+  return [...new Set([...requestedKinds, ...SORT_KINDS])]
+    .filter((kind) => SORT_KINDS.includes(kind));
+}
+
+export function reorderSortPriority(priority, draggedKind, targetKind) {
+  const normalizedPriority = normalizeSortPriority(priority);
+  if (
+    !SORT_KINDS.includes(draggedKind)
+    || !SORT_KINDS.includes(targetKind)
+    || draggedKind === targetKind
+  ) {
+    return normalizedPriority;
+  }
+
+  const targetIndex = normalizedPriority.indexOf(targetKind);
+  const nextPriority = normalizedPriority.filter((kind) => kind !== draggedKind);
+  nextPriority.splice(targetIndex, 0, draggedKind);
+  return normalizeSortPriority(nextPriority);
+}
+
+export function updateSortMode(
+  sort,
+  lastSortDirection,
+  kind,
+  mode,
+  sortPriority = SORT_KINDS,
+) {
+  const normalizedSort = normalizeSort(sort);
+  const normalizedPriority = normalizeSortPriority(sortPriority);
   if (!["purchase", "name"].includes(kind) || !["off", "asc", "desc"].includes(mode)) {
     return {
-      sort: normalizeSort(sort),
+      sort: normalizedSort,
       lastSortDirection: {
         purchase: ["asc", "desc"].includes(lastSortDirection?.purchase)
           ? lastSortDirection.purchase
@@ -124,6 +199,7 @@ export function updateSortMode(sort, lastSortDirection, kind, mode) {
           ? lastSortDirection.name
           : "asc",
       },
+      sortPriority: normalizedPriority,
     };
   }
 
@@ -151,31 +227,29 @@ export function updateSortMode(sort, lastSortDirection, kind, mode) {
   return {
     sort: nextSort,
     lastSortDirection: nextDirections,
+    sortPriority: normalizedPriority,
   };
 }
 
-export function sortItems(items, sort = { purchase: "asc", name: "off" }) {
+export function sortItems(
+  items,
+  sort = { purchase: "asc", name: "off" },
+  sortPriority = SORT_KINDS,
+) {
   const result = [...items];
   const normalizedSort = normalizeSort(sort);
-
-  if (normalizedSort.name !== "off") {
-    const nameDirection = normalizedSort.name === "desc" ? -1 : 1;
-    const purchaseDirection = normalizedSort.purchase === "desc" ? -1 : 1;
-    return result.sort((left, right) => {
-      const titleOrder = collator.compare(left.title, right.title) * nameDirection;
-      if (titleOrder !== 0) return titleOrder;
-      const purchaseOrder = (left.globalOrder ?? Number.MAX_SAFE_INTEGER)
-        - (right.globalOrder ?? Number.MAX_SAFE_INTEGER);
-      return purchaseOrder * purchaseDirection;
-    });
-  }
-
-  const direction = normalizedSort.purchase === "desc" ? -1 : 1;
+  const normalizedPriority = normalizeSortPriority(sortPriority);
   return result.sort((left, right) => {
-    const sourceOrder = (left.globalOrder ?? Number.MAX_SAFE_INTEGER)
-      - (right.globalOrder ?? Number.MAX_SAFE_INTEGER);
-    if (sourceOrder !== 0) return sourceOrder * direction;
-    return collator.compare(left.title, right.title);
+    for (const kind of normalizedPriority) {
+      if (normalizedSort[kind] === "off") continue;
+      const direction = normalizedSort[kind] === "desc" ? -1 : 1;
+      const order = kind === "name"
+        ? collator.compare(left.title ?? "", right.title ?? "")
+        : (left.globalOrder ?? Number.MAX_SAFE_INTEGER)
+          - (right.globalOrder ?? Number.MAX_SAFE_INTEGER);
+      if (order !== 0) return order * direction;
+    }
+    return collator.compare(String(left.key ?? ""), String(right.key ?? ""));
   });
 }
 

@@ -102,12 +102,23 @@
           <div>
             <strong>이 기기에만 저장</strong>
             <p>상품 정보, 정리 상태, 테마·언어와 결제 합계 캐시는 외부 서버로 전송되지 않으며 언제든 삭제할 수 있습니다.</p>
+            <div class="organization-backup-actions" id="organization-backup-actions">
+              <button class="organization-backup-button" id="export-organization-data" type="button" aria-label="정리 데이터 백업">
+                <span class="licon licon-download" aria-hidden="true"></span>
+                백업
+              </button>
+              <button class="organization-backup-button" id="import-organization-data" type="button" aria-label="정리 데이터 복원">
+                <span class="licon licon-folder-input" aria-hidden="true"></span>
+                복원
+              </button>
+              <input id="organization-backup-file" type="file" accept=".json,application/json" hidden>
+            </div>
             <button class="privacy-clear-button" id="clear-local-data" type="button">저장 데이터 모두 삭제</button>
           </div>
         </div>
-        <p class="service-version" id="service-version" aria-label="버전 1.0.4">
+        <p class="service-version" id="service-version" aria-label="버전 1.0.5">
           <span>버전</span>
-          <strong>1.0.4</strong>
+          <strong>1.0.5</strong>
         </p>
       </aside>
 
@@ -170,32 +181,35 @@
           <div class="hero-meta">
             <div class="sync-meta" id="last-sync">아직 동기화하지 않았어요</div>
             <div class="sort-controls" role="group" aria-label="상품 정렬">
-              <label class="sort-control" data-sort-control="purchase">
-                <span class="sort-control-label">
-                  <span class="sort-control-icon licon licon-arrow-up-down" aria-hidden="true"></span>
-                  구매순
+              <button
+                class="sort-switch"
+                id="sort-kind-toggle"
+                type="button"
+                aria-label="정렬 기준 변경"
+              >
+                <span
+                  class="sort-switch-icon licon licon-shopping-bag"
+                  id="sort-kind-icon"
+                  aria-hidden="true"
+                ></span>
+                <span class="sort-switch-wheel" aria-hidden="true">
+                  <span class="sort-switch-value" id="sort-kind-value">구매순</span>
                 </span>
-                <span class="field-select sort-direction-select">
-                  <select id="purchase-sort-select" aria-label="구매순 정렬 방향">
-                    <option value="off">끄기</option>
-                    <option value="asc" selected>오름차순</option>
-                    <option value="desc">내림차순</option>
-                  </select>
+                <span class="sort-switch-change licon licon-refresh-cw" aria-hidden="true"></span>
+              </button>
+              <button
+                class="sort-switch"
+                id="sort-direction-toggle"
+                type="button"
+                aria-label="정렬 방향 변경"
+                data-direction="asc"
+              >
+                <span class="sort-switch-icon licon licon-arrow-up-down" aria-hidden="true"></span>
+                <span class="sort-switch-wheel" aria-hidden="true">
+                  <span class="sort-switch-value" id="sort-direction-value">오름차순</span>
                 </span>
-              </label>
-              <label class="sort-control is-off" data-sort-control="name">
-                <span class="sort-control-label">
-                  <span class="sort-control-icon sort-name-icon licon licon-arrow-down-a-z" aria-hidden="true"></span>
-                  이름순
-                </span>
-                <span class="field-select sort-direction-select">
-                  <select id="name-sort-select" aria-label="이름순 정렬 방향">
-                    <option value="off" selected>끄기</option>
-                    <option value="asc">오름차순</option>
-                    <option value="desc">내림차순</option>
-                  </select>
-                </span>
-              </label>
+                <span class="sort-switch-change licon licon-refresh-cw" aria-hidden="true"></span>
+              </button>
             </div>
           </div>
         </section>
@@ -330,6 +344,26 @@
         <div class="modal-actions">
           <button class="secondary-button" type="button" data-close-dialog="data-delete-dialog">취소</button>
           <button class="danger-button" type="submit">모든 로컬 데이터 삭제</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal compact-modal" id="organization-restore-dialog">
+      <form method="dialog" id="organization-restore-form">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">정리 데이터 복원</p>
+            <h2>이 백업으로 정리 데이터를 바꿀까요?</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="organization-restore-dialog" aria-label="닫기">
+            <span class="licon licon-x" aria-hidden="true"></span>
+          </button>
+        </div>
+        <p class="confirm-copy" id="organization-restore-summary"></p>
+        <p class="organization-restore-warning">상품 목록은 그대로 유지되며 현재 폴더, 상품 배치와 즐겨찾기만 백업 내용으로 교체됩니다.</p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-close-dialog="organization-restore-dialog">취소</button>
+          <button class="primary-button" type="submit">복원하기</button>
         </div>
       </form>
     </dialog>
