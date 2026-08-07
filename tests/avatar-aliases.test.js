@@ -18,9 +18,19 @@ test("주요 아바타 사전은 여러 문자권의 공식 표기와 별칭을 
   }
 
   for (const avatar of AVATAR_SEARCH_ALIASES) {
+    assert.match(avatar.id, /^[a-z0-9]+$/u);
     assert.ok(avatar.terms.length >= 1);
     assert.equal(new Set(avatar.terms).size, avatar.terms.length);
     assert.equal(new Set(avatar.aliases).size, avatar.aliases.length);
+    assert.ok(avatar.productIds.every((value) => /^\d+$/u.test(value)));
     assert.ok([...avatar.terms, ...avatar.aliases].every((value) => value.trim().length > 0));
   }
+
+  assert.equal(new Set(AVATAR_SEARCH_ALIASES.map((avatar) => avatar.id)).size, AVATAR_SEARCH_ALIASES.length);
+  const productIds = AVATAR_SEARCH_ALIASES.flatMap((avatar) => avatar.productIds);
+  assert.equal(new Set(productIds).size, productIds.length);
+  assert.deepEqual(
+    AVATAR_SEARCH_ALIASES.find((avatar) => avatar.id === "misaki")?.productIds,
+    ["8325804"],
+  );
 });

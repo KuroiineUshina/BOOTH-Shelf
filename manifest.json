@@ -14,10 +14,11 @@
     "storage"
   ],
   "optional_host_permissions": [
-    "https://accounts.booth.pm/*"
+    "https://accounts.booth.pm/*",
+    "https://booth.pm/*"
   ],
   "content_security_policy": {
-    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src https://accounts.booth.pm; img-src 'self' https://booth.pximg.net; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src https://accounts.booth.pm https://booth.pm; img-src 'self' https://booth.pximg.net; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"
   },
   "background": {
     "service_worker": "background.js",

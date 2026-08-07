@@ -44,6 +44,21 @@ export function sanitizeProductUrl(value, productId, baseUrl = BOOTH_ACCOUNTS_OR
   return url.href;
 }
 
+export function buildProductPageUrl(productId) {
+  return /^\d+$/.test(String(productId || ""))
+    ? `${BOOTH_PRODUCT_ORIGIN}/ja/items/${productId}`
+    : "";
+}
+
+export function isAllowedProductUrl(value, expectedProductId = null) {
+  const url = parseHttpsUrl(value, BOOTH_PRODUCT_ORIGIN);
+  if (!url || url.origin !== BOOTH_PRODUCT_ORIGIN || url.search || url.hash) return false;
+
+  const productId = getBoothProductId(url.href, BOOTH_PRODUCT_ORIGIN);
+  if (!productId) return false;
+  return expectedProductId === null || productId === String(expectedProductId);
+}
+
 export function sanitizeSellerUrl(value, baseUrl = BOOTH_ACCOUNTS_ORIGIN) {
   const url = parseHttpsUrl(value, baseUrl);
   if (!url) return "";

@@ -4,20 +4,26 @@ import assert from "node:assert/strict";
 import {
   MAX_FOLDER_DEPTH,
   canMoveFolder,
+  createCategory,
   createFolder,
+  deleteCategoryAndReleaseFolders,
   deleteFolderAndPromote,
   filterItems,
   folderDepth,
   getDescendantIds,
+  getItemFolderIds,
   itemHasSource,
   matchingDownloadFiles,
   moveFolder,
   reorderSortPriority,
+  renameCategory,
   renameFolder,
   setItemDownloadFiles,
   setItemFolderAssignment,
+  setItemFolderAssignments,
   setItemsFolderAssignment,
   sortItems,
+  toggleCategoryCollapsed,
   updateSortMode,
 } from "../src/domain.js";
 
@@ -27,6 +33,75 @@ const folders = [
   { id: "grandchild", name: "캐주얼", parentId: "child", order: 0 },
   { id: "tools", name: "툴", parentId: null, order: 1 },
 ];
+
+test("카테고리를 만들고 이름과 접힘 상태를 관리한다", () => {
+  const created = createCategory([], {
+    id: "avatars",
+    name: " 아바타 ",
+    createdAt: "2026-08-08T00:00:00.000Z",
+  });
+  assert.deepEqual(created, [{
+    id: "avatars",
+    name: "아바타",
+    order: 0,
+    collapsed: false,
+    createdAt: "2026-08-08T00:00:00.000Z",
+  }]);
+
+  const renamed = renameCategory(created, "avatars", "캐릭터");
+  assert.equal(renamed[0].name, "캐릭터");
+  assert.equal(toggleCategoryCollapsed(renamed, "avatars")[0].collapsed, true);
+  assert.throws(
+    () => createCategory(renamed, { id: "duplicate", name: " 캐릭터 " }),
+    /동일한 이름/,
+  );
+});
+
+test("카테고리는 폴더 계층 밖에 있고 삭제해도 안의 폴더를 보존한다", () => {
+  const categorizedFolders = [
+    { id: "avatar-root", name: "의상", parentId: null, categoryId: "avatars", order: 0 },
+    { id: "avatar-child", name: "캐주얼", parentId: "avatar-root", categoryId: null, order: 0 },
+    { id: "world-root", name: "의상", parentId: null, categoryId: "worlds", order: 0 },
+  ];
+  const result = deleteCategoryAndReleaseFolders(
+    [
+      { id: "avatars", name: "아바타", collapsed: false },
+      { id: "worlds", name: "월드", collapsed: false },
+    ],
+    categorizedFolders,
+    "avatars",
+  );
+
+  assert.deepEqual(result.categories.map((category) => category.id), ["worlds"]);
+  assert.equal(result.folders.find((folder) => folder.id === "avatar-root").categoryId, null);
+  assert.equal(result.folders.find((folder) => folder.id === "avatar-child").parentId, "avatar-root");
+  assert.equal(result.folders.find((folder) => folder.id === "world-root").categoryId, "worlds");
+});
+
+test("서로 다른 카테고리의 최상위 폴더는 같은 이름을 쓸 수 있고 카테고리 간 이동할 수 있다", () => {
+  const initial = createFolder([], {
+    id: "avatar-clothes",
+    name: "의상",
+    categoryId: "avatars",
+  });
+  const withWorldFolder = createFolder(initial, {
+    id: "world-clothes",
+    name: "의상",
+    categoryId: "worlds",
+  });
+  assert.throws(
+    () => createFolder(withWorldFolder, {
+      id: "duplicate",
+      name: "의상",
+      categoryId: "avatars",
+    }),
+    /동일한 이름/,
+  );
+
+  const moved = moveFolder(withWorldFolder, "avatar-clothes", null, "tools");
+  assert.equal(moved.find((folder) => folder.id === "avatar-clothes").categoryId, "tools");
+  assert.equal(folderDepth(moved, "avatar-clothes"), 1);
+});
 
 test("폴더 깊이는 최상위부터 1~3으로 계산한다", () => {
   assert.equal(folderDepth(folders, "root"), 1);
@@ -64,37 +139,48 @@ test("유효한 이동은 부모를 바꾼다", () => {
 
 test("폴더 삭제 시 하위 폴더와 상품 배치를 한 단계 위로 보존한다", () => {
   const result = deleteFolderAndPromote(folders, {
-    "purchased:1": "child",
-    "gift:2": "grandchild",
+    "purchased:1": ["child", "tools"],
+    "gift:2": ["grandchild"],
+    "product:3": ["root", "child"],
   }, "child");
 
   assert.equal(result.folders.some((folder) => folder.id === "child"), false);
   assert.equal(result.folders.find((folder) => folder.id === "grandchild").parentId, "root");
-  assert.equal(result.assignments["purchased:1"], "root");
-  assert.equal(result.assignments["gift:2"], "grandchild");
+  assert.deepEqual(result.assignments["purchased:1"], ["root", "tools"]);
+  assert.deepEqual(result.assignments["gift:2"], ["grandchild"]);
+  assert.deepEqual(result.assignments["product:3"], ["root"]);
 });
 
-test("상품을 폴더에 넣거나 미분류로 옮길 때 기존 배치를 변경하지 않는다", () => {
+test("상품의 여러 폴더 배치를 한 번에 편집하고 기존 입력은 변경하지 않는다", () => {
   const items = [{ key: "purchased:1" }, { key: "gift:2" }];
-  const assignments = { "purchased:1": "root" };
+  const assignments = { "purchased:1": ["root"] };
 
-  const moved = setItemFolderAssignment(items, folders, assignments, "purchased:1", "tools");
-  assert.deepEqual(moved, { "purchased:1": "tools" });
-  assert.deepEqual(assignments, { "purchased:1": "root" });
+  const classified = setItemFolderAssignments(
+    items,
+    folders,
+    assignments,
+    "purchased:1",
+    ["root", "tools", "tools"],
+  );
+  assert.deepEqual(classified, { "purchased:1": ["root", "tools"] });
+  assert.deepEqual(assignments, { "purchased:1": ["root"] });
+  assert.deepEqual(getItemFolderIds(classified, "purchased:1"), ["root", "tools"]);
 
-  const unfiled = setItemFolderAssignment(items, folders, moved, "purchased:1", null);
+  const single = setItemFolderAssignment(items, folders, classified, "purchased:1", "tools");
+  assert.deepEqual(single, { "purchased:1": ["tools"] });
+  const unfiled = setItemFolderAssignment(items, folders, single, "purchased:1", null);
   assert.deepEqual(unfiled, {});
 });
 
-test("선택한 여러 상품을 한 번에 같은 폴더로 옮긴다", () => {
+test("선택한 여러 상품을 기존 분류를 유지한 채 같은 폴더에도 추가한다", () => {
   const items = [
     { key: "product:1" },
     { key: "product:2" },
     { key: "product:3" },
   ];
   const assignments = {
-    "product:1": "root",
-    "product:3": "child",
+    "product:1": ["root"],
+    "product:3": ["child"],
   };
 
   const moved = setItemsFolderAssignment(
@@ -105,14 +191,19 @@ test("선택한 여러 상품을 한 번에 같은 폴더로 옮긴다", () => {
     "tools",
   );
   assert.deepEqual(moved, {
-    "product:3": "child",
-    "product:1": "tools",
-    "product:2": "tools",
+    "product:1": ["root", "tools"],
+    "product:3": ["child"],
+    "product:2": ["tools"],
   });
   assert.deepEqual(assignments, {
-    "product:1": "root",
-    "product:3": "child",
+    "product:1": ["root"],
+    "product:3": ["child"],
   });
+
+  assert.deepEqual(
+    setItemsFolderAssignment(items, folders, moved, ["product:1", "product:2"], null),
+    { "product:3": ["child"] },
+  );
 });
 
 test("존재하지 않는 상품이나 폴더로의 배치를 차단한다", () => {
@@ -148,7 +239,10 @@ test("상품명·판매자·출처·즐겨찾기·폴더 필터를 조합한다"
   assert.equal(itemHasSource(items[4], "free"), true);
   assert.equal(itemHasSource(items[3], "gift"), true);
   assert.deepEqual(filterItems(items, { favoritesOnly: true, favorites: ["purchased:3"] }).map((item) => item.key), ["purchased:3"]);
-  assert.deepEqual(filterItems(items, { folderId: "unfiled", assignments: { "gift:2": "world" } }).map((item) => item.key), ["purchased:1", "purchased:3", "product:4", "free:5"]);
+  const assignments = { "gift:2": ["world", "root"] };
+  assert.deepEqual(filterItems(items, { folderId: "unfiled", assignments }).map((item) => item.key), ["purchased:1", "purchased:3", "product:4", "free:5"]);
+  assert.deepEqual(filterItems(items, { folderId: "world", assignments }).map((item) => item.key), ["gift:2"]);
+  assert.deepEqual(filterItems(items, { folderId: "root", assignments }).map((item) => item.key), ["gift:2"]);
 });
 
 test("아바타 별칭과 다운로드 파일명을 제안 없이 바로 검색한다", () => {
@@ -204,6 +298,72 @@ test("아바타 별칭과 다운로드 파일명을 제안 없이 바로 검색�
     matchingDownloadFiles(items[3], "misaki").map((file) => file.label),
     ["Stay_Over_Rose_Misaki.zip"],
   );
+});
+
+test("Misaki 검색이 변환 문자열 내부의 Maya 대응 상품을 잘못 찾지 않는다", () => {
+  const items = [{
+    key: "product:ribbon-long-hair",
+    title: "[MANUKA/舞夜/Shinra/ウルフェリア] Ribbon Long Hair",
+    sellerName: "TOYO",
+    downloadFiles: [],
+  }];
+
+  assert.deepEqual(filterItems(items, { query: "misaki." }), []);
+  assert.deepEqual(filterItems(items, { query: "마야" }).map((item) => item.key), [
+    "product:ribbon-long-hair",
+  ]);
+});
+
+test("akdi는 마야로만 인식하고 Misaki 상품과 파일을 찾지 않는다", () => {
+  const items = [
+    {
+      key: "product:misaki-avatar",
+      title: "오리지널 3D 모델 해소-Misaki-",
+      sellerName: "VISION TOKYO",
+      downloadFiles: [{ label: "Misaki_VRM_V1.01.zip", detail: "24 MB" }],
+    },
+    {
+      key: "product:misaki-outfit",
+      title: "Stay Over Rose",
+      sellerName: "SONOFUKU",
+      downloadFiles: [{ label: "Stay_Over_Rose_Misaki.zip", detail: "20 MB" }],
+    },
+    {
+      key: "product:maya-outfit",
+      title: "舞夜 Maya Casual Outfit",
+      sellerName: "Maya Shop",
+      downloadFiles: [{ label: "Maya_Casual.zip", detail: "18 MB" }],
+    },
+  ];
+
+  assert.deepEqual(filterItems(items, { query: "akdi" }).map((item) => item.key), [
+    "product:maya-outfit",
+  ]);
+  assert.deepEqual(filterItems(items, { query: "마야" }).map((item) => item.key), [
+    "product:maya-outfit",
+  ]);
+  assert.deepEqual(
+    filterItems(items, { query: "akdi", searchField: "download" }).map((item) => item.key),
+    ["product:maya-outfit"],
+  );
+});
+
+test("상품명과 파일명에 없어도 상품 설명에서 확인한 지원 아바타로 검색한다", () => {
+  const items = [{
+    key: "product:description-only",
+    title: "Ribbon Long Hair",
+    sellerName: "TOYO",
+    downloadFiles: [{ label: "ribbon-hair.zip", detail: "20 MB" }],
+    supportedAvatarIds: ["misaki"],
+  }];
+
+  for (const query of ["Misaki", "미사키", "ミサキ", "海咲"]) {
+    assert.deepEqual(filterItems(items, { query }).map((item) => item.key), [
+      "product:description-only",
+    ]);
+  }
+  assert.deepEqual(filterItems(items, { query: "마야" }), []);
+  assert.deepEqual(filterItems(items, { query: "미사키", searchField: "title" }), []);
 });
 
 test("카드에서 새로 확인한 다운로드 파일명을 검색용 상품 데이터에 반영한다", () => {

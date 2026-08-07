@@ -9,19 +9,24 @@ export const STORAGE_KEY = "boothShelfState";
 export const PREFERENCES_KEY = "boothShelfPreferences";
 export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
 export const ORGANIZATION_BACKUP_FORMAT = "booth-shelf-organization";
-export const ORGANIZATION_BACKUP_VERSION = 1;
+export const ORGANIZATION_BACKUP_VERSION = 3;
 
 const MAX_STORED_ITEMS = 50_000;
 const MAX_ITEM_LOCATIONS = 256;
 const MAX_DOWNLOAD_FILES_PER_ITEM = 512;
+const MAX_SUPPORTED_AVATARS_PER_ITEM = 128;
+const MAX_FOLDER_ASSIGNMENTS_PER_ITEM = 64;
 const MAX_STORED_FOLDERS = 2_000;
+const MAX_STORED_CATEGORIES = 200;
 const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const ITEM_SOURCES = Object.freeze(["purchased", "gift", "free"]);
+const AVATAR_PROFILE_ID_PATTERN = /^[a-z0-9]{1,64}$/;
 
 export const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 3,
+  schemaVersion: 5,
   items: [],
+  categories: [],
   folders: [],
   favorites: [],
   assignments: {},
@@ -32,6 +37,7 @@ function cloneDefaultState() {
   return {
     ...DEFAULT_STATE,
     items: [],
+    categories: [],
     folders: [],
     favorites: [],
     assignments: {},
@@ -65,7 +71,7 @@ function cleanDate(value) {
 export function sanitizePreferences(value) {
   const preferences = isRecord(value) ? value : {};
   return {
-    theme: preferences.theme === "dark" ? "dark" : "light",
+    theme: ["light", "dark", "system"].includes(preferences.theme) ? preferences.theme : "light",
     locale: ["ko", "en", "ja"].includes(preferences.locale) ? preferences.locale : "auto",
   };
 }
@@ -169,6 +175,14 @@ function sanitizeDownloadFiles(value) {
   return [...files.values()];
 }
 
+function sanitizeSupportedAvatarIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .slice(0, MAX_SUPPORTED_AVATARS_PER_ITEM)
+    .map((entry) => cleanString(entry, 64).toLocaleLowerCase("en-US"))
+    .filter((entry) => AVATAR_PROFILE_ID_PATTERN.test(entry)))];
+}
+
 function mergeDownloadFiles(...fileLists) {
   return sanitizeDownloadFiles(fileLists.flat());
 }
@@ -233,6 +247,9 @@ function sanitizeItem(value) {
     imageUrl: sanitizeImageUrl(value.imageUrl, productId),
     productUrl: sanitizeProductUrl(value.productUrl, productId),
     downloadFiles: sanitizeDownloadFiles(value.downloadFiles),
+    supportedAvatarIds: sanitizeSupportedAvatarIds(value.supportedAvatarIds),
+    supportIndexedAt: cleanDate(value.supportIndexedAt),
+    supportIndexVersion: nonNegativeInteger(value.supportIndexVersion),
     globalOrder: nonNegativeInteger(value.globalOrder),
   });
 }
@@ -243,6 +260,9 @@ function mergeItems(existing, incoming) {
   const locations = mergeLocations(existing.locations, incoming.locations);
   const preferIncomingSeller = existing.sellerName === "알 수 없는 판매자"
     && incoming.sellerName !== "알 수 없는 판매자";
+  const existingSupportTime = Date.parse(existing.supportIndexedAt) || 0;
+  const incomingSupportTime = Date.parse(incoming.supportIndexedAt) || 0;
+  const supportSource = incomingSupportTime > existingSupportTime ? incoming : existing;
 
   return withPrimaryLocation({
     ...existing,
@@ -253,6 +273,9 @@ function mergeItems(existing, incoming) {
     imageUrl: existing.imageUrl || incoming.imageUrl,
     productUrl: existing.productUrl || incoming.productUrl,
     downloadFiles: mergeDownloadFiles(existing.downloadFiles, incoming.downloadFiles),
+    supportedAvatarIds: [...supportSource.supportedAvatarIds],
+    supportIndexedAt: supportSource.supportIndexedAt,
+    supportIndexVersion: supportSource.supportIndexVersion,
     globalOrder: Math.min(existing.globalOrder, incoming.globalOrder),
   });
 }
@@ -276,17 +299,33 @@ function normalizeStoredItemKey(value) {
   return match ? `product:${match[1]}` : null;
 }
 
-function storedItemKeyPriority(value) {
-  if (value.startsWith("product:")) return 3;
-  if (value.startsWith("purchased:")) return 2;
-  if (value.startsWith("gift:")) return 1;
-  return 0;
+function sanitizeCategories(value) {
+  if (!Array.isArray(value)) return [];
+  const categories = [];
+  const seen = new Set();
+
+  for (const candidate of value.slice(0, MAX_STORED_CATEGORIES)) {
+    if (!isRecord(candidate) || !isSafeId(candidate.id) || seen.has(candidate.id)) continue;
+    const name = cleanString(candidate.name, 40);
+    if (!name) continue;
+    seen.add(candidate.id);
+    categories.push({
+      id: candidate.id,
+      name,
+      order: nonNegativeInteger(candidate.order),
+      collapsed: candidate.collapsed === true,
+      createdAt: cleanDate(candidate.createdAt),
+    });
+  }
+
+  return categories;
 }
 
-function sanitizeFolders(value) {
+function sanitizeFolders(value, categories = []) {
   if (!Array.isArray(value)) return [];
   const folders = [];
   const seen = new Set();
+  const categoryIds = new Set(categories.map((category) => category.id));
 
   for (const candidate of value.slice(0, MAX_STORED_FOLDERS)) {
     if (!isRecord(candidate) || !isSafeId(candidate.id) || seen.has(candidate.id)) continue;
@@ -298,6 +337,7 @@ function sanitizeFolders(value) {
       id: candidate.id,
       name,
       parentId: isSafeId(candidate.parentId) ? candidate.parentId : null,
+      categoryId: isSafeId(candidate.categoryId) ? candidate.categoryId : null,
       order: nonNegativeInteger(candidate.order),
       createdAt: cleanDate(candidate.createdAt),
     });
@@ -323,6 +363,8 @@ function sanitizeFolders(value) {
       }
       depth += 1;
     }
+
+    if (folder.parentId || !categoryIds.has(folder.categoryId)) folder.categoryId = null;
   }
 
   return folders;
@@ -331,7 +373,8 @@ function sanitizeFolders(value) {
 export function sanitizeState(value) {
   const state = isRecord(value) ? value : {};
   const items = sanitizeItems(state.items);
-  const folders = sanitizeFolders(state.folders);
+  const categories = sanitizeCategories(state.categories);
+  const folders = sanitizeFolders(state.folders, categories);
   const itemKeys = new Set(items.map((item) => item.key));
   const folderIds = new Set(folders.map((folder) => folder.id));
 
@@ -347,21 +390,25 @@ export function sanitizeState(value) {
   }
 
   const assignments = {};
-  const assignmentPriorities = new Map();
   if (isRecord(state.assignments)) {
-    for (const [storedKey, folderId] of Object.entries(state.assignments)) {
+    for (const [storedKey, storedFolderIds] of Object.entries(state.assignments)) {
       const key = normalizeStoredItemKey(storedKey);
-      const priority = storedItemKeyPriority(storedKey);
-      if (!key || !itemKeys.has(key) || !folderIds.has(folderId)) continue;
-      if (priority <= (assignmentPriorities.get(key) || 0)) continue;
-      assignments[key] = folderId;
-      assignmentPriorities.set(key, priority);
+      if (!key || !itemKeys.has(key)) continue;
+      const candidates = Array.isArray(storedFolderIds) ? storedFolderIds : [storedFolderIds];
+      const nextFolderIds = assignments[key] ?? [];
+      for (const folderId of candidates) {
+        if (nextFolderIds.length >= MAX_FOLDER_ASSIGNMENTS_PER_ITEM) break;
+        if (!folderIds.has(folderId) || nextFolderIds.includes(folderId)) continue;
+        nextFolderIds.push(folderId);
+      }
+      if (nextFolderIds.length) assignments[key] = nextFolderIds;
     }
   }
 
   return {
     ...cloneDefaultState(),
     items,
+    categories,
     folders,
     favorites,
     assignments,
@@ -379,18 +426,23 @@ export function createOrganizationBackup(value, exportedAt = new Date()) {
     version: ORGANIZATION_BACKUP_VERSION,
     exportedAt: timestamp || new Date().toISOString(),
     data: {
+      categories: state.categories.map((category) => ({ ...category })),
       folders: state.folders.map((folder) => ({ ...folder })),
       favorites: [...state.favorites],
-      assignments: { ...state.assignments },
+      assignments: Object.fromEntries(
+        Object.entries(state.assignments).map(([itemKey, folderIds]) => [itemKey, [...folderIds]]),
+      ),
     },
   };
 }
 
 export function restoreOrganizationBackup(currentValue, backupValue) {
+  const supportedBackupVersions = [1, 2, ORGANIZATION_BACKUP_VERSION];
   if (!isRecord(backupValue)
     || backupValue.format !== ORGANIZATION_BACKUP_FORMAT
-    || backupValue.version !== ORGANIZATION_BACKUP_VERSION
+    || !supportedBackupVersions.includes(backupValue.version)
     || !isRecord(backupValue.data)
+    || (backupValue.version >= 3 && !Array.isArray(backupValue.data.categories))
     || !Array.isArray(backupValue.data.folders)
     || !Array.isArray(backupValue.data.favorites)
     || !isRecord(backupValue.data.assignments)) {
@@ -410,6 +462,7 @@ export function restoreOrganizationBackup(currentValue, backupValue) {
 
   const restoredState = sanitizeState({
     ...currentState,
+    categories: backupValue.version >= 3 ? backupValue.data.categories : [],
     folders: backupValue.data.folders,
     favorites: backupValue.data.favorites,
     assignments: backupValue.data.assignments,
@@ -422,9 +475,11 @@ export function restoreOrganizationBackup(currentValue, backupValue) {
   return {
     state: restoredState,
     stats: {
+      categoryCount: restoredState.categories.length,
       folderCount: restoredState.folders.length,
       favoriteCount: restoredState.favorites.length,
-      assignmentCount: Object.keys(restoredState.assignments).length,
+      assignmentCount: Object.values(restoredState.assignments)
+        .reduce((count, folderIds) => count + folderIds.length, 0),
       skippedItemCount: [...requestedItemKeys]
         .filter((itemKey) => !restoredItemKeys.has(itemKey))
         .length,

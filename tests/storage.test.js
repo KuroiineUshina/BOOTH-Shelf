@@ -57,25 +57,40 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
         title: "중복 상품",
         productUrl: "javascript:alert(2)",
         imageUrl: "https://tracker.example/i/101/pixel-2.gif",
+        supportedAvatarIds: ["misaki", "misaki", "INVALID!", "__proto__"],
+        supportIndexedAt: "2026-08-08T00:00:00.000Z",
+        supportIndexVersion: 1,
       }),
       validItem({ productId: "not-a-number", key: "purchased:not-a-number" }),
     ],
+    categories: [
+      {
+        id: "avatars",
+        name: " 아바타 ",
+        order: 2,
+        collapsed: true,
+        createdAt: "2026-08-08T00:00:00.000Z",
+        injected: true,
+      },
+      { id: "avatars", name: "중복", order: 0 },
+      { id: "__proto__", name: "위험한 카테고리", order: 0 },
+    ],
     folders: [
-      { id: "root", name: " 루트 ", parentId: null, order: 0 },
-      { id: "child", name: "자식", parentId: "root", order: 0 },
+      { id: "root", name: " 루트 ", parentId: null, categoryId: "avatars", order: 0 },
+      { id: "child", name: "자식", parentId: "root", categoryId: "avatars", order: 0 },
       { id: "grandchild", name: "손자", parentId: "child", order: 0 },
       { id: "too-deep", name: "깊이 초과", parentId: "grandchild", order: 0 },
       { id: "__proto__", name: "위험한 키", parentId: null, order: 0 },
     ],
     favorites: ["purchased:101", "purchased:101", "gift:999"],
     assignments: {
-      "purchased:101": "child",
+      "purchased:101": ["child", "child", "missing"],
       "gift:999": "root",
     },
     lastSyncedAt: "not-a-date",
   });
 
-  assert.equal(sanitized.schemaVersion, 3);
+  assert.equal(sanitized.schemaVersion, 5);
   assert.equal("injected" in sanitized, false);
   assert.equal(sanitized.items.length, 1);
   assert.equal(sanitized.items[0].title, "안전한 상품");
@@ -89,10 +104,22 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
     label: "avatar_package_v2.zip",
     detail: "42 MB",
   }]);
+  assert.deepEqual(sanitized.items[0].supportedAvatarIds, ["misaki"]);
+  assert.equal(sanitized.items[0].supportIndexedAt, "2026-08-08T00:00:00.000Z");
+  assert.equal(sanitized.items[0].supportIndexVersion, 1);
   assert.equal("url" in sanitized.items[0].downloadFiles[0], false);
+  assert.deepEqual(sanitized.categories, [{
+    id: "avatars",
+    name: "아바타",
+    order: 2,
+    collapsed: true,
+    createdAt: "2026-08-08T00:00:00.000Z",
+  }]);
   assert.deepEqual(sanitized.favorites, ["product:101"]);
-  assert.deepEqual(sanitized.assignments, { "product:101": "child" });
+  assert.deepEqual(sanitized.assignments, { "product:101": ["child"] });
   assert.equal(sanitized.folders.some((folder) => folder.id === "__proto__"), false);
+  assert.equal(sanitized.folders.find((folder) => folder.id === "root").categoryId, "avatars");
+  assert.equal(sanitized.folders.find((folder) => folder.id === "child").categoryId, null);
   assert.equal(sanitized.folders.find((folder) => folder.id === "too-deep").parentId, null);
   assert.equal(sanitized.lastSyncedAt, null);
 });
@@ -133,7 +160,9 @@ test("이전 버전의 같은 구매·기프트 상품과 정리 상태를 한 �
     ],
   );
   assert.deepEqual(sanitized.favorites, ["product:101"]);
-  assert.deepEqual(sanitized.assignments, { "product:101": "purchase-folder" });
+  assert.deepEqual(sanitized.assignments, {
+    "product:101": ["gift-folder", "purchase-folder"],
+  });
 });
 
 test("무료 다운로드 출처와 라이브러리 위치를 보존한다", () => {
@@ -158,22 +187,39 @@ test("무료 다운로드 출처와 라이브러리 위치를 보존한다", () 
   assert.deepEqual(sanitized.favorites, ["product:101"]);
 });
 
-test("정리 데이터 백업은 상품 목록 없이 폴더·배치·즐겨찾기만 내보낸다", () => {
+test("정리 데이터 백업은 상품 목록 없이 카테고리·폴더·배치·즐겨찾기만 내보낸다", () => {
   const backup = createOrganizationBackup({
     items: [validItem()],
-    folders: [{ id: "avatar", name: "아바타", parentId: null, order: 0 }],
+    categories: [{
+      id: "assets",
+      name: "에셋",
+      order: 0,
+      collapsed: true,
+      createdAt: "2026-07-27T00:00:00.000Z",
+    }],
+    folders: [
+      { id: "avatar", name: "아바타", parentId: null, categoryId: "assets", order: 0 },
+      { id: "clothes", name: "의상", parentId: "avatar", order: 0 },
+    ],
     favorites: ["purchased:101"],
-    assignments: { "purchased:101": "avatar" },
+    assignments: { "purchased:101": ["avatar", "clothes"] },
     lastSyncedAt: "2026-07-27T00:00:00.000Z",
   }, new Date("2026-07-27T01:02:03.000Z"));
 
   assert.equal(backup.format, "booth-shelf-organization");
-  assert.equal(backup.version, 1);
+  assert.equal(backup.version, 3);
   assert.equal(backup.exportedAt, "2026-07-27T01:02:03.000Z");
   assert.equal("items" in backup.data, false);
   assert.equal("lastSyncedAt" in backup.data, false);
+  assert.deepEqual(backup.data.categories, [{
+    id: "assets",
+    name: "에셋",
+    order: 0,
+    collapsed: true,
+    createdAt: "2026-07-27T00:00:00.000Z",
+  }]);
   assert.deepEqual(backup.data.favorites, ["product:101"]);
-  assert.deepEqual(backup.data.assignments, { "product:101": "avatar" });
+  assert.deepEqual(backup.data.assignments, { "product:101": ["avatar", "clothes"] });
 });
 
 test("정리 데이터 복원은 현재 상품 목록을 보존하고 일치하는 상품만 연결한다", () => {
@@ -203,13 +249,65 @@ test("정리 데이터 복원은 현재 상품 목록을 보존하고 일치하�
   assert.equal(restored.state.lastSyncedAt, "2026-07-27T00:00:00.000Z");
   assert.deepEqual(restored.state.folders.map((folder) => folder.id), ["avatar"]);
   assert.deepEqual(restored.state.favorites, ["product:101"]);
-  assert.deepEqual(restored.state.assignments, { "product:101": "avatar" });
+  assert.deepEqual(restored.state.assignments, { "product:101": ["avatar"] });
   assert.deepEqual(restored.stats, {
+    categoryCount: 0,
     folderCount: 1,
     favoriteCount: 1,
     assignmentCount: 1,
     skippedItemCount: 1,
   });
+});
+
+test("정리 데이터 백업 3형식은 카테고리와 최상위 폴더 연결을 복원한다", () => {
+  const current = sanitizeState({ items: [validItem()] });
+  const restored = restoreOrganizationBackup(current, {
+    format: "booth-shelf-organization",
+    version: 3,
+    exportedAt: "2026-08-08T00:00:00.000Z",
+    data: {
+      categories: [{
+        id: "avatars",
+        name: "아바타 에셋",
+        order: 0,
+        collapsed: true,
+        createdAt: "2026-08-08T00:00:00.000Z",
+      }],
+      folders: [
+        { id: "clothes", name: "의상", parentId: null, categoryId: "avatars", order: 0 },
+        { id: "casual", name: "캐주얼", parentId: "clothes", categoryId: "avatars", order: 0 },
+      ],
+      favorites: ["product:101"],
+      assignments: { "product:101": ["casual"] },
+    },
+  });
+
+  assert.equal(restored.state.categories[0].collapsed, true);
+  assert.equal(restored.state.folders.find((folder) => folder.id === "clothes").categoryId, "avatars");
+  assert.equal(restored.state.folders.find((folder) => folder.id === "casual").categoryId, null);
+  assert.equal(restored.stats.categoryCount, 1);
+});
+
+test("정리 데이터 백업 2형식은 상품 하나의 여러 폴더 배치를 복원한다", () => {
+  const current = sanitizeState({ items: [validItem()] });
+  const restored = restoreOrganizationBackup(current, {
+    format: "booth-shelf-organization",
+    version: 2,
+    exportedAt: "2026-08-08T00:00:00.000Z",
+    data: {
+      folders: [
+        { id: "avatar", name: "아바타", parentId: null, order: 0 },
+        { id: "clothes", name: "의상", parentId: "avatar", order: 0 },
+      ],
+      favorites: [],
+      assignments: { "product:101": ["avatar", "clothes"] },
+    },
+  });
+
+  assert.deepEqual(restored.state.assignments, {
+    "product:101": ["avatar", "clothes"],
+  });
+  assert.equal(restored.stats.assignmentCount, 2);
 });
 
 test("정리 데이터 복원은 형식 오류와 동기화 전 상품 배치를 차단한다", () => {
@@ -258,7 +356,11 @@ test("테마와 결제 합계 캐시는 허용된 값만 저장한다", () => {
   );
   assert.deepEqual(
     sanitizePreferences({ theme: "system", locale: "invalid" }),
-    { theme: "light", locale: "auto" },
+    { theme: "system", locale: "auto" },
+  );
+  assert.deepEqual(
+    sanitizePreferences({ theme: "unknown", locale: "ko" }),
+    { theme: "light", locale: "ko" },
   );
 
   const summary = sanitizeSpendingSummary({

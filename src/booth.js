@@ -1,5 +1,7 @@
 import {
   BOOTH_ACCOUNTS_ORIGIN,
+  BOOTH_PRODUCT_ORIGIN,
+  buildProductPageUrl,
   buildOrderDetailUrl,
   buildOrdersPageUrl,
   buildSourcePageUrl,
@@ -7,6 +9,7 @@ import {
   getBoothProductId,
   isAllowedLibraryUrl,
   isAllowedOrdersUrl,
+  isAllowedProductUrl,
   sanitizeDownloadUrl,
   sanitizeImageUrl,
   sanitizeProductUrl,
@@ -14,11 +17,18 @@ import {
   sanitizeSourcePageUrl,
 } from "./urls.js";
 import { formatLocalizedNumber, t } from "./i18n.js";
+import {
+  findAvatarProfileIdsInText,
+  getAvatarProfileIdByProductId,
+} from "./search.js";
 
 const RETRIABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const MAX_RETRY_DELAY_MS = 30_000;
 const MIN_REQUEST_INTERVAL_MS = 300;
 let nextRequestAt = 0;
+export const PRODUCT_SUPPORT_INDEX_VERSION = 1;
+const PRODUCT_SUPPORT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const PRODUCT_SUPPORT_CHECKPOINT_SIZE = 12;
 
 export const SOURCES = Object.freeze([
   {
@@ -425,6 +435,195 @@ export function parseBoothDownloadOptions(html, { productId, pageUrl }) {
   return readDownloadOptionsFromDocument(documentNode, { productId, pageUrl });
 }
 
+const SUPPORT_SECTION_PATTERN = /(?:対応\s*(?:モデル|アバター|キャラクター)|(?:지원|대응)\s*(?:모델|아바타|캐릭터)|(?:supported|compatible)\s*(?:models?|avatars?|characters?))/iu;
+const OTHER_SECTION_PATTERN = /(?:shader|シェーダ|쉐이더|構成|구성|内容物|同梱物|내용물|contents?|商品説明|상품\s*설명|description|注意事項|주의사항|terms?|利用規約|이용규약|更新|update|문의|contact|仕様|specification)/iu;
+const NEGATIVE_SUPPORT_PATTERN = /(?:非対応|未対応|対応していません|対応しておりません|対応予定|미지원|(?:지원|대응)하지\s*않|(?:지원|대응)\s*예정|추후\s*(?:지원|대응)|not\s+(?:supported|compatible)|unsupported|incompatible|planned|coming\s+soon)/iu;
+const EXPLICIT_SUPPORT_PATTERN = /(?:対応|지원|대응|supported|compatible)/iu;
+const ORIGINAL_AVATAR_PATTERN = /(?:オリジナル\s*3d\s*(?:モデル|アバター)|original\s*3d\s*(?:model|avatar)|원본\s*3d\s*(?:모델|아바타))/iu;
+const PRODUCT_LINK_PATTERN = /https:\/\/[^\s<>"'）)\]]+/giu;
+
+function descriptionLines(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\s+/gu, " ").trim());
+}
+
+function linkedAvatarProducts(value) {
+  const products = new Map();
+  for (const match of String(value || "").matchAll(PRODUCT_LINK_PATTERN)) {
+    const productId = getBoothProductId(match[0], BOOTH_PRODUCT_ORIGIN);
+    if (!productId || products.has(productId)) continue;
+    products.set(productId, getAvatarProfileIdByProductId(productId));
+  }
+  return [...products].map(([productId, profileId]) => ({ productId, profileId }));
+}
+
+export function extractProductSupportSignals(description) {
+  const lines = descriptionLines(description);
+  const supported = new Set();
+  const linkedProductIds = new Set();
+  let inSupportSection = false;
+  let previousLine = "";
+
+  const addTextMatches = (value) => {
+    for (const profileId of findAvatarProfileIdsInText(value)) supported.add(profileId);
+  };
+
+  for (const line of lines) {
+    if (!line) continue;
+    const context = `${previousLine} ${line}`.trim();
+    const linkedProducts = linkedAvatarProducts(line);
+    const negative = NEGATIVE_SUPPORT_PATTERN.test(line)
+      || (linkedProducts.length > 0 && NEGATIVE_SUPPORT_PATTERN.test(previousLine));
+    const supportHeading = SUPPORT_SECTION_PATTERN.test(line);
+
+    if (supportHeading) {
+      inSupportSection = true;
+      if (!negative) {
+        addTextMatches(line);
+        for (const { productId, profileId } of linkedProducts) {
+          linkedProductIds.add(productId);
+          if (profileId) supported.add(profileId);
+        }
+      }
+      previousLine = line;
+      continue;
+    }
+
+    if (inSupportSection && OTHER_SECTION_PATTERN.test(line)) {
+      inSupportSection = false;
+    }
+
+    if (!negative) {
+      const contextProfileIds = new Set(findAvatarProfileIdsInText(context));
+      const explicitContext = EXPLICIT_SUPPORT_PATTERN.test(context)
+        || ORIGINAL_AVATAR_PATTERN.test(context);
+      for (const { productId, profileId } of linkedProducts) {
+        if (inSupportSection
+          || explicitContext
+          || (profileId && contextProfileIds.has(profileId))
+          || (!profileId && contextProfileIds.size > 0)) {
+          linkedProductIds.add(productId);
+          if (profileId) supported.add(profileId);
+        }
+      }
+
+      if (inSupportSection
+        || EXPLICIT_SUPPORT_PATTERN.test(line)
+        || ORIGINAL_AVATAR_PATTERN.test(line)) {
+        addTextMatches(line);
+      }
+    }
+
+    previousLine = line;
+  }
+
+  return {
+    supportedAvatarIds: [...supported].sort(),
+    linkedProductIds: [...linkedProductIds].sort((left, right) => Number(left) - Number(right)),
+  };
+}
+
+export function extractSupportedAvatarIds(description) {
+  return extractProductSupportSignals(description).supportedAvatarIds;
+}
+
+function findProductDescriptionInJson(value) {
+  if (!value || typeof value !== "object") return "";
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const description = findProductDescriptionInJson(entry);
+      if (description) return description;
+    }
+    return "";
+  }
+
+  const types = Array.isArray(value["@type"]) ? value["@type"] : [value["@type"]];
+  if (types.includes("Product") && typeof value.description === "string") {
+    return value.description;
+  }
+  return findProductDescriptionInJson(value["@graph"]);
+}
+
+function descriptionTextFromNode(node, pageUrl) {
+  if (!node) return "";
+  const clone = node.cloneNode(true);
+  for (const anchor of clone.querySelectorAll("a[href]")) {
+    const productId = getBoothProductId(anchor.getAttribute("href"), pageUrl);
+    if (!productId) continue;
+    anchor.after(clone.ownerDocument.createTextNode(` ${buildProductPageUrl(productId)}`));
+  }
+  for (const breakNode of clone.querySelectorAll("br")) {
+    breakNode.replaceWith(clone.ownerDocument.createTextNode("\n"));
+  }
+  for (const block of clone.querySelectorAll("p, div, li, h1, h2, h3, h4, h5, h6")) {
+    block.append(clone.ownerDocument.createTextNode("\n"));
+  }
+  return String(clone.textContent || "").trim().slice(0, 40_000);
+}
+
+function readProductDescription(documentNode, pageUrl) {
+  const visibleDescription = descriptionTextFromNode(
+    documentNode.querySelector(".js-market-item-detail-description"),
+    pageUrl,
+  );
+  if (visibleDescription) return visibleDescription;
+
+  for (const script of documentNode.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const description = findProductDescriptionInJson(JSON.parse(script.textContent || ""));
+      if (!description) continue;
+      const parsedDescription = new DOMParser().parseFromString(description, "text/html");
+      return descriptionTextFromNode(parsedDescription.body, pageUrl) || description.slice(0, 40_000);
+    } catch {
+      // Ignore unrelated or malformed structured-data blocks.
+    }
+  }
+  return "";
+}
+
+export function parseBoothProductSupport(html, { productId, pageUrl }) {
+  if (!/^\d+$/.test(String(productId || ""))
+    || !isAllowedProductUrl(pageUrl, productId)) {
+    throw new Error(t("올바르지 않은 BOOTH 상품 페이지입니다."));
+  }
+  if (typeof DOMParser === "undefined") {
+    throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
+  }
+
+  const documentNode = new DOMParser().parseFromString(html, "text/html");
+  const description = readProductDescription(documentNode, pageUrl);
+  const signals = extractProductSupportSignals(description);
+  return {
+    descriptionFound: Boolean(description),
+    ...signals,
+  };
+}
+
+export function parseBoothProductIdentity(html, { productId, pageUrl }) {
+  if (!/^\d+$/.test(String(productId || ""))
+    || !isAllowedProductUrl(pageUrl, productId)) {
+    throw new Error(t("올바르지 않은 BOOTH 상품 페이지입니다."));
+  }
+  if (typeof DOMParser === "undefined") {
+    throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
+  }
+
+  const documentNode = new DOMParser().parseFromString(html, "text/html");
+  const titleParts = [
+    documentNode.querySelector('meta[property="og:title"]')?.getAttribute("content"),
+    documentNode.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
+    documentNode.querySelector("h1")?.textContent,
+    documentNode.querySelector("title")?.textContent,
+  ].filter(Boolean);
+  const profileIds = [...new Set(titleParts.flatMap((value) => findAvatarProfileIdsInText(value)))];
+  return {
+    profileId: profileIds.length === 1 ? profileIds[0] : null,
+  };
+}
+
 export function getOrdersPageNumber(href, baseUrl = BOOTH_ACCOUNTS_ORIGIN) {
   try {
     const url = new URL(href, baseUrl);
@@ -532,17 +731,21 @@ export function summarizeBoothOrderDetails(details, scannedAt = new Date().toISO
   };
 }
 
-async function fetchHtml(url) {
-  if (!isAllowedLibraryUrl(url) && !isAllowedOrdersUrl(url)) {
-    throw new Error(t("허용되지 않은 BOOTH 주소 요청을 차단했습니다."));
-  }
-
+async function waitForRequestSlot() {
   const scheduledAt = Math.max(Date.now(), nextRequestAt);
   nextRequestAt = scheduledAt + MIN_REQUEST_INTERVAL_MS;
   const throttleDelay = scheduledAt - Date.now();
   if (throttleDelay > 0) {
     await new Promise((resolve) => setTimeout(resolve, throttleDelay));
   }
+}
+
+async function fetchHtml(url) {
+  if (!isAllowedLibraryUrl(url) && !isAllowedOrdersUrl(url)) {
+    throw new Error(t("허용되지 않은 BOOTH 주소 요청을 차단했습니다."));
+  }
+
+  await waitForRequestSlot();
 
   const response = await fetch(url, {
     credentials: "include",
@@ -556,6 +759,33 @@ async function fetchHtml(url) {
   if (response.url.includes("/users/sign_in")) throw new BoothAuthError();
   if (!isAllowedLibraryUrl(response.url) && !isAllowedOrdersUrl(response.url)) {
     throw new Error(t("BOOTH가 예상하지 않은 주소로 이동해 응답을 차단했습니다."));
+  }
+  if (!response.ok) {
+    const error = new Error(t("BOOTH 응답 오류 ({status})", { status: response.status }));
+    error.status = response.status;
+    error.retryAfterMs = parseRetryAfter(response.headers.get("Retry-After"));
+    throw error;
+  }
+  return response.text();
+}
+
+async function fetchProductHtml(url, productId) {
+  if (!isAllowedProductUrl(url, productId)) {
+    throw new Error(t("허용되지 않은 BOOTH 상품 주소 요청을 차단했습니다."));
+  }
+
+  await waitForRequestSlot();
+  const response = await fetch(url, {
+    credentials: "omit",
+    redirect: "follow",
+    cache: "no-store",
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+    },
+  });
+
+  if (!isAllowedProductUrl(response.url, productId)) {
+    throw new Error(t("BOOTH가 예상하지 않은 상품 주소로 이동해 응답을 차단했습니다."));
   }
   if (!response.ok) {
     const error = new Error(t("BOOTH 응답 오류 ({status})", { status: response.status }));
@@ -583,12 +813,12 @@ function shouldRetry(error) {
   return !Number.isInteger(error?.status) || RETRIABLE_STATUS_CODES.has(error.status);
 }
 
-async function fetchWithRetry(url, attempts = 3) {
+async function fetchWithRetry(url, attempts = 3, fetcher = fetchHtml) {
   let lastError;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await fetchHtml(url);
+      return await fetcher(url);
     } catch (error) {
       if (error instanceof BoothAuthError) throw error;
       lastError = error;
@@ -679,6 +909,136 @@ async function runPool(tasks, concurrency, worker) {
 
   await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, consume));
   return results;
+}
+
+export function isProductSupportIndexFresh(item, now = Date.now()) {
+  if (item?.supportIndexVersion !== PRODUCT_SUPPORT_INDEX_VERSION
+    || !Array.isArray(item?.supportedAvatarIds)) {
+    return false;
+  }
+  const indexedAt = Date.parse(item.supportIndexedAt);
+  return Number.isFinite(indexedAt)
+    && now - indexedAt >= 0
+    && now - indexedAt < PRODUCT_SUPPORT_MAX_AGE_MS;
+}
+
+export async function indexBoothProductSupport(items, {
+  onProgress = () => {},
+  onCheckpoint = async () => {},
+  now = Date.now(),
+} = {}) {
+  const nextItems = (Array.isArray(items) ? items : []).map((item) => ({ ...item }));
+  const tasks = nextItems
+    .map((item, itemIndex) => ({ item, itemIndex }))
+    .filter(({ item }) => /^\d+$/.test(String(item?.productId || ""))
+      && !isProductSupportIndexFresh(item, now));
+
+  let completed = 0;
+  let scannedCount = 0;
+  let failedCount = 0;
+  const linkedProductProfiles = new Map();
+
+  const resolveLinkedProductProfile = (productId) => {
+    const knownProfileId = getAvatarProfileIdByProductId(productId);
+    if (knownProfileId) return Promise.resolve(knownProfileId);
+    if (!linkedProductProfiles.has(productId)) {
+      linkedProductProfiles.set(productId, (async () => {
+        const pageUrl = buildProductPageUrl(productId);
+        const html = await fetchWithRetry(
+          pageUrl,
+          3,
+          (url) => fetchProductHtml(url, productId),
+        );
+        return parseBoothProductIdentity(html, { productId, pageUrl }).profileId;
+      })());
+    }
+    return linkedProductProfiles.get(productId);
+  };
+
+  if (tasks.length) {
+    onProgress({
+      phase: "product-support",
+      completed: 0,
+      total: tasks.length,
+      message: t("상품 설명 {completed}/{total}개 확인 중", {
+        completed: formatLocalizedNumber(0),
+        total: formatLocalizedNumber(tasks.length),
+      }),
+    });
+  }
+
+  for (let offset = 0; offset < tasks.length; offset += PRODUCT_SUPPORT_CHECKPOINT_SIZE) {
+    const chunk = tasks.slice(offset, offset + PRODUCT_SUPPORT_CHECKPOINT_SIZE);
+    const results = await runPool(chunk, 2, async ({ item, itemIndex }) => {
+      try {
+        const pageUrl = buildProductPageUrl(item.productId);
+        const html = await fetchWithRetry(
+          pageUrl,
+          3,
+          (url) => fetchProductHtml(url, item.productId),
+        );
+        const support = parseBoothProductSupport(html, {
+          productId: item.productId,
+          pageUrl,
+        });
+        const supportedAvatarIds = new Set(support.supportedAvatarIds);
+        let linkedProductFailed = false;
+        for (const linkedProductId of support.linkedProductIds) {
+          if (linkedProductId === item.productId) continue;
+          try {
+            const profileId = await resolveLinkedProductProfile(linkedProductId);
+            if (profileId) supportedAvatarIds.add(profileId);
+          } catch {
+            linkedProductFailed = true;
+          }
+        }
+        const indexedItem = {
+          ...item,
+          supportedAvatarIds: [...supportedAvatarIds].sort(),
+        };
+        if (!linkedProductFailed) {
+          indexedItem.supportIndexedAt = new Date(now).toISOString();
+          indexedItem.supportIndexVersion = PRODUCT_SUPPORT_INDEX_VERSION;
+        }
+        return {
+          itemIndex,
+          item: indexedItem,
+          failed: linkedProductFailed,
+        };
+      } catch {
+        return { itemIndex, item, failed: true };
+      }
+    });
+
+    for (const result of results) {
+      nextItems[result.itemIndex] = result.item;
+      completed += 1;
+      if (result.failed) failedCount += 1;
+      else scannedCount += 1;
+    }
+
+    onProgress({
+      phase: "product-support",
+      completed,
+      total: tasks.length,
+      message: t("상품 설명 {completed}/{total}개 확인 중", {
+        completed: formatLocalizedNumber(completed),
+        total: formatLocalizedNumber(tasks.length),
+      }),
+    });
+    await onCheckpoint(nextItems.map((item) => ({ ...item })), {
+      completed,
+      total: tasks.length,
+      failedCount,
+    });
+  }
+
+  return {
+    items: nextItems,
+    scannedCount,
+    failedCount,
+    supportedProductCount: nextItems.filter((item) => item.supportedAvatarIds?.length).length,
+  };
 }
 
 export async function calculateBoothSpending(onProgress = () => {}) {

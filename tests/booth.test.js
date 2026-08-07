@@ -2,13 +2,71 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  PRODUCT_SUPPORT_INDEX_VERSION,
   SOURCES,
+  extractProductSupportSignals,
+  extractSupportedAvatarIds,
   extractProductId,
   getOrdersPageNumber,
   getPageNumber,
   groupBoothLibraryItems,
+  isProductSupportIndexFresh,
   summarizeBoothOrderDetails,
 } from "../src/booth.js";
+
+test("상품 설명의 지원 구역과 연결된 아바타 상품을 검색 색인으로 만든다", () => {
+  const supported = extractSupportedAvatarIds(`
+    ▼対応モデル▼
+    森羅
+    https://booth.pm/ja/items/4707634
+    <a href="https://booth.pm/ja/items/8325804">海咲</a>
+    舞夜は対応予定です
+
+    ▼Contents▼
+    Maya sample texture
+  `);
+
+  assert.deepEqual(supported, ["misaki", "shinra"]);
+  assert.deepEqual(
+    extractProductSupportSignals("対応モデル\n<a href=\"https://booth.pm/ja/items/9876543\">モデルを見る</a>")
+      .linkedProductIds,
+    ["9876543"],
+  );
+});
+
+test("지원 표기 없이 우연히 등장한 아바타 이름과 링크는 색인하지 않는다", () => {
+  assert.deepEqual(extractSupportedAvatarIds("촬영: Maya\nhttps://booth.pm/ja/items/8325804"), []);
+  assert.deepEqual(
+    extractSupportedAvatarIds("Supported avatar: Misaki https://booth.pm/ja/items/8325804"),
+    ["misaki"],
+  );
+});
+
+test("미지원·지원 예정 항목 다음의 정상 지원 항목은 함께 제외하지 않는다", () => {
+  assert.deepEqual(extractSupportedAvatarIds(`
+    対応モデル
+    舞夜は対応予定です
+    森羅
+  `), ["shinra"]);
+  assert.deepEqual(extractSupportedAvatarIds(`
+    対応モデル
+    Misaki is not supported
+    https://booth.pm/ja/items/8325804
+    マヌカ
+  `), ["manuka"]);
+});
+
+test("상품 설명 지원 색인은 버전과 30일 유효기간을 모두 확인한다", () => {
+  const now = Date.parse("2026-08-08T00:00:00.000Z");
+  const indexed = {
+    supportedAvatarIds: [],
+    supportIndexedAt: "2026-08-01T00:00:00.000Z",
+    supportIndexVersion: PRODUCT_SUPPORT_INDEX_VERSION,
+  };
+  assert.equal(isProductSupportIndexFresh(indexed, now), true);
+  assert.equal(isProductSupportIndexFresh({ ...indexed, supportIndexedAt: "2026-06-01T00:00:00.000Z" }, now), false);
+  assert.equal(isProductSupportIndexFresh({ ...indexed, supportIndexVersion: 0 }, now), false);
+});
 
 test("다국어 BOOTH 상품 URL에서 상품 ID를 읽는다", () => {
   assert.equal(extractProductId("https://booth.pm/ko/items/7234297"), "7234297");

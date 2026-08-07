@@ -33,6 +33,11 @@ test("UI 문구와 변수 자리를 선택한 언어로 번역한다", () => {
     t("정렬 기준 변경: 현재 {value}", { value: "Purchase order" }),
     "Change sort criterion: currently Purchase order",
   );
+  assert.equal(t("카테고리 추가"), "Add category");
+  assert.equal(
+    t("{name} 폴더 빠른 메뉴", { name: "Avatar" }),
+    "Quick actions for the Avatar folder",
+  );
 
   setLocale("ja");
   assert.equal(t("무료 상품"), "無料ダウンロード");
@@ -45,6 +50,16 @@ test("UI 문구와 변수 자리를 선택한 언어로 번역한다", () => {
     "言語を変更：現在は日本語、次は한국어",
   );
   assert.equal(t("{amount}엔", { amount: "1,000" }), "1,000円");
+  assert.equal(t("카테고리 없음"), "カテゴリーなし");
+  assert.equal(
+    t("{categories}개 카테고리, {folders}개 폴더, {assignments}개 상품 배치, {favorites}개 즐겨찾기를 복원합니다.", {
+      categories: 2,
+      folders: 4,
+      assignments: 8,
+      favorites: 3,
+    }),
+    "2個のカテゴリー、4個のフォルダー、8件の商品配置、3件のお気に入りを復元します。",
+  );
 
   setLocale("ko");
   assert.equal(t("전체 상품"), "전체 상품");

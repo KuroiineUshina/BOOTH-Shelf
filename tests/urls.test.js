@@ -2,12 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildProductPageUrl,
   buildOrderDetailUrl,
   buildOrdersPageUrl,
   buildSourcePageUrl,
   getBoothOrderId,
   getBoothProductId,
   isAllowedOrdersUrl,
+  isAllowedProductUrl,
   sanitizeImageUrl,
   sanitizeDownloadUrl,
   sanitizeProductUrl,
@@ -23,6 +25,12 @@ test("상품과 판매자 URL은 HTTPS BOOTH 도메인만 허용한다", () => {
   assert.equal(sanitizeProductUrl("https://booth.pm/ko/items/999", "123"), "");
   assert.equal(sanitizeSellerUrl("https://maker.booth.pm/"), "https://maker.booth.pm/");
   assert.equal(sanitizeSellerUrl("https://accounts.booth.pm/"), "");
+  assert.equal(buildProductPageUrl("123"), "https://booth.pm/ja/items/123");
+  assert.equal(buildProductPageUrl("not-a-number"), "");
+  assert.equal(isAllowedProductUrl("https://booth.pm/ja/items/123", "123"), true);
+  assert.equal(isAllowedProductUrl("https://booth.pm/ja/items/123?tracking=1", "123"), false);
+  assert.equal(isAllowedProductUrl("https://maker.booth.pm/items/123", "123"), false);
+  assert.equal(isAllowedProductUrl("https://booth.pm/ja/items/999", "123"), false);
 });
 
 test("썸네일과 출처 페이지 URL을 정확한 허용 목록으로 제한한다", () => {

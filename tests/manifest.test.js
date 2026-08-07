@@ -15,9 +15,12 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.equal(manifest.version_name, manifest.version);
   assert.deepEqual(manifest.permissions, ["storage"]);
   assert.equal(manifest.host_permissions, undefined);
-  assert.deepEqual(manifest.optional_host_permissions, ["https://accounts.booth.pm/*"]);
+  assert.deepEqual(manifest.optional_host_permissions, [
+    "https://accounts.booth.pm/*",
+    "https://booth.pm/*",
+  ]);
   const policy = manifest.content_security_policy.extension_pages;
-  assert.match(policy, /connect-src https:\/\/accounts\.booth\.pm/);
+  assert.match(policy, /connect-src https:\/\/accounts\.booth\.pm https:\/\/booth\.pm/);
   assert.match(policy, /img-src 'self' https:\/\/booth\.pximg\.net/);
   assert.match(policy, /object-src 'none'/);
   assert.doesNotMatch(policy, /unsafe-eval|unsafe-inline/);
@@ -30,6 +33,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     "styles.css",
     "src/app.js",
     "src/avatar-aliases.js",
+    "src/booth.js",
     "src/i18n.js",
     "src/search.js",
     "src/storage.js",
@@ -59,8 +63,17 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(dashboard, /id="import-organization-data"/);
   assert.match(dashboard, /id="organization-backup-file"[^>]*accept="\.json,application\/json"/);
   assert.match(dashboard, /id="organization-restore-dialog"/);
+  assert.match(dashboard, /id="add-category"/);
+  assert.match(dashboard, /id="context-menu"[^>]*role="menu"/);
+  assert.match(dashboard, /id="folder-name-label"/);
+  assert.match(dashboard, /id="folder-parent-label"/);
+  assert.match(dashboard, /id="confirm-dialog-eyebrow"/);
+  assert.match(dashboard, /id="confirm-dialog-title"/);
+  assert.match(dashboard, /id="confirm-submit"/);
   assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.6"/);
   assert.match(dashboard, /id="theme-toggle"/);
+  assert.match(dashboard, /class="licon licon-sun" id="theme-toggle-icon"/);
+  assert.doesNotMatch(dashboard, /id="theme-toggle"[^>]*aria-pressed/);
   assert.match(dashboard, /id="red-pill-button"/);
   assert.match(dashboard, /id="red-pill-dialog"/);
   assert.match(dashboard, /id="sort-kind-toggle"/);
@@ -76,6 +89,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(dashboard, /id="load-more-sentinel"/);
   assert.doesNotMatch(dashboard, /id="load-more"/);
   assert.doesNotMatch(dashboard, /id="search-suggestions"/);
+  assert.doesNotMatch(dashboard, /empty-monogram/);
   assert.match(dashboard, /licon-layout-grid/);
   assert.match(dashboard, /licon-shopping-bag/);
   assert.match(dashboard, /licon-gift/);
@@ -85,6 +99,8 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
 
   const [
     app,
+    booth,
+    privacy,
     styles,
     lucideLicense,
     paperlogyLicense,
@@ -95,6 +111,8 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     twitterPost,
   ] = await Promise.all([
     readFile(path.join(root, "src/app.js"), "utf8"),
+    readFile(path.join(root, "src/booth.js"), "utf8"),
+    readFile(path.join(root, "PRIVACY.md"), "utf8"),
     readFile(path.join(root, "styles.css"), "utf8"),
     readFile(path.join(root, "assets/lucide/LICENSE"), "utf8"),
     readFile(path.join(root, "assets/paperlogy/OFL.txt"), "utf8"),
@@ -106,6 +124,10 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   ]);
   const legacyIconGlyphs = /[×▦▣◇☆★＋▰▱□♥↗☰⌕☀☾↻↕←↓›]/u;
   assert.doesNotMatch(`${dashboard}\n${app}`, legacyIconGlyphs);
+  assert.match(booth, /credentials:\s*"omit"/);
+  assert.match(booth, /isAllowedProductUrl\(response\.url, productId\)/);
+  assert.match(privacy, /`https:\/\/booth\.pm\/\*`/);
+  assert.match(privacy, /상품 설명 원문[^\n]*저장하지 않습니다/);
   assert.match(app, /className: "item-seller-link"/);
   assert.match(app, /href: item\.sellerUrl/);
   assert.match(app, /target: "_blank"/);
@@ -182,13 +204,27 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(app, /new IntersectionObserver/);
   assert.match(app, /loadNextResultPage/);
   assert.match(app, /className: "item-visual-header"/);
-  assert.match(app, /text: t\(assignedFolderId \? "폴더 변경" : "폴더에 넣기"\)/);
+  assert.match(app, /text: t\(assignedFolderIds\.length \? "폴더 관리" : "폴더에 넣기"\)/);
+  assert.match(app, /querySelectorAll\('input\[name="assign-folder"\]:checked'\)/);
+  assert.match(app, /setItemFolderAssignments\(/);
+  assert.match(dashboard, /id="assign-folder-list"/);
+  assert.doesNotMatch(dashboard, /id="assign-folder-select"/);
   assert.match(app, /actions\.append\(assignButton, favoriteButton\)/);
   assert.match(app, /const LOCALE_SEQUENCE = Object\.freeze\(\["ko", "en", "ja"\]\)/);
   assert.match(app, /refs\["language-toggle"\]\.addEventListener\("click"/);
+  assert.match(app, /const THEME_SEQUENCE = Object\.freeze\(\["light", "dark", "system"\]\)/);
+  assert.match(app, /prefers-color-scheme: dark/);
+  assert.match(app, /SYSTEM_THEME_MEDIA\?\.addEventListener\("change", handleSystemThemeChange\)/);
+  assert.match(styles, /\.licon-monitor::before \{ content: "\\e11d"; \}/);
   assert.match(app, /function exportOrganizationData\(\)/);
   assert.match(app, /function prepareOrganizationRestore\(event\)/);
   assert.match(app, /function confirmOrganizationRestore\(event\)/);
+  assert.match(app, /function renderCategory\(category, roots\)/);
+  assert.match(app, /function openCategoryContextMenu\(event, categoryId\)/);
+  assert.match(app, /function openFolderContextMenu\(event, folderId\)/);
+  assert.match(app, /document\.addEventListener\("contextmenu", handleContextMenu\)/);
+  assert.match(app, /shouldKeepNativeContextMenu\(event\.target\)/);
+  assert.match(app, /deleteCategoryAndReleaseFolders\(/);
   assert.match(app, /download: `booth-shelf-organization-\$\{date\}\.json`/);
   assert.match(styles, /\.licon-languages::before \{ content: "\\e0fe"; \}/);
   assert.match(styles, /html\.is-theme-switching[\s\S]*transition:\s*none !important/);
@@ -196,6 +232,18 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(styles, /\.download-option\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s);
   assert.match(styles, /\.download-option-copy\s*\{[^}]*min-width:\s*0;[^}]*flex:\s*1 1 0;[^}]*overflow:\s*hidden;/s);
   assert.match(styles, /\.download-option-arrow\s*\{[^}]*width:\s*25px;[^}]*flex:\s*0 0 25px;[^}]*margin-left:\s*auto;/s);
+  assert.match(styles, /\.folder-category-row\s*\{/);
+  assert.match(styles, /\.folder-category-contents\s*\{/);
+  assert.match(styles, /\.context-menu\s*\{/);
+  assert.doesNotMatch(styles, /\.context-menu-grid\s*\{/);
+  assert.match(styles, /\.licon-folder-plus::before \{ content: "\\e0d9"; \}/);
+  assert.match(styles, /\.licon-pencil::before \{ content: "\\e1f9"; \}/);
+  assert.match(styles, /\.licon-move::before \{ content: "\\e121"; \}/);
+  assert.match(styles, /\.licon-trash-2::before \{ content: "\\e18e"; \}/);
+  assert.match(app, /label: t\("하위 추가"\),\s*icon: "folder-plus"/s);
+  assert.match(app, /label: t\("이름 변경"\),\s*icon: "pencil"/s);
+  assert.match(app, /label: t\("이동"\),\s*icon: "move"/s);
+  assert.match(app, /label: t\("삭제"\),\s*icon: "trash-2"/s);
 
   const supportLink = dashboard.match(/<a(?=[^>]*class="support-link")[^>]*>/)?.[0];
   assert.ok(supportLink, "Ko-fi 후원 링크가 있어야 한다");

@@ -1,25 +1,25 @@
 // BOOTH 상품에 쓰이는 표기와 한국·영문권에서 자주 쓰는 검색 표기를 연결합니다.
 // terms는 실제 상품명에서 찾을 공식 표기, aliases는 사용자가 입력할 수 있는 표기입니다.
-export const AVATAR_SEARCH_ALIASES = Object.freeze([
-  { terms: ["ミルティナ", "Milltina"], aliases: ["miltina", "mirutina", "밀티나", "미루티나"] },
-  { terms: ["海咲", "Misaki", "ミサキ", "みさき"], aliases: ["misaki", "미사키"] },
+const AVATAR_DEFINITIONS = [
+  { terms: ["ミルティナ", "Milltina"], aliases: ["miltina", "mirutina", "밀티나", "미루티나"], productIds: ["6538026"] },
+  { terms: ["海咲", "Misaki", "ミサキ", "みさき"], aliases: ["misaki", "미사키"], productIds: ["8325804"] },
   { terms: ["ルルネ", "rurune"], aliases: ["lulune", "루루네", "룰루네", "르루네"] },
-  { terms: ["しなの", "Shinano"], aliases: ["시나노"] },
-  { terms: ["マヌカ", "Manuka"], aliases: ["마누카"] },
+  { terms: ["しなの", "Shinano"], aliases: ["시나노"], productIds: ["6106863"] },
+  { terms: ["マヌカ", "Manuka"], aliases: ["마누카"], productIds: ["5058077"] },
   { terms: ["桔梗", "Kikyo"], aliases: ["kikyou", "키쿄", "키쿄우"] },
-  { terms: ["萌", "Moe"], aliases: ["모에"] },
+  { terms: ["萌", "Moe"], aliases: ["모에"], productIds: ["4667400"] },
   { terms: ["愛莉", "Airi"], aliases: ["아이리"] },
-  { terms: ["セレスティア", "Selestia"], aliases: ["celestia", "세레스티아", "셀레스티아"] },
-  { terms: ["Sio", "しお", "シオ"], aliases: ["shio", "시오"] },
-  { terms: ["森羅", "Shinra"], aliases: ["신라"] },
-  { terms: ["ラシューシャ", "Lasyusha"], aliases: ["rasyusha", "라슈샤"] },
-  { terms: ["舞夜", "Maya"], aliases: ["마야"] },
+  { terms: ["セレスティア", "Selestia"], aliases: ["celestia", "세레스티아", "셀레스티아"], productIds: ["4035411"] },
+  { terms: ["Sio", "しお", "シオ"], aliases: ["shio", "시오"], productIds: ["5650156"] },
+  { terms: ["森羅", "Shinra"], aliases: ["신라"], productIds: ["4707634"] },
+  { terms: ["ラシューシャ", "Lasyusha"], aliases: ["rasyusha", "라슈샤"], productIds: ["4825073"] },
+  { terms: ["舞夜", "Maya"], aliases: ["마야"], productIds: ["3390957"] },
   { terms: ["めいゆん", "MEIYUN"], aliases: ["meiyun", "메이윤", "메이윈"] },
   { terms: ["ライム", "Lime"], aliases: ["raimu", "라임"] },
   { terms: ["シフォン", "Chiffon"], aliases: ["shifon", "시폰", "쉬폰"] },
-  { terms: ["ショコラ", "Chocolat"], aliases: ["chocolate", "shokora", "쇼콜라"] },
+  { terms: ["ショコラ", "Chocolat"], aliases: ["chocolate", "shokora", "쇼콜라"], productIds: ["6405390"] },
   { terms: ["まめひなた", "Mamehinata"], aliases: ["mame hinata", "마메히나타", "마메 히나타"] },
-  { terms: ["キプフェル", "Kipfel"], aliases: ["kipuferu", "킵펠", "키프펠", "키푸페루"] },
+  { terms: ["キプフェル", "Kipfel"], aliases: ["kipuferu", "킵펠", "키프펠", "키푸페루"], productIds: ["5813187"] },
   { terms: ["瑞希", "Mizuki"], aliases: ["미즈키"] },
   { terms: ["ルミナ", "LUMINA"], aliases: ["lumina", "rumina", "루미나"] },
   { terms: ["マリシア", "Marycia"], aliases: ["marishia", "마리시아"] },
@@ -27,13 +27,13 @@ export const AVATAR_SEARCH_ALIASES = Object.freeze([
   { terms: ["Robin", "ロビン"], aliases: ["로빈"] },
   { terms: ["竜胆", "Rindo"], aliases: ["rindou", "린도", "린도우"] },
   { terms: ["Grus", "グルス"], aliases: ["gurusu", "그루스"] },
-  { terms: ["カリン", "Karin"], aliases: ["카린"] },
+  { terms: ["カリン", "Karin"], aliases: ["카린"], productIds: ["3470989"] },
   { terms: ["狐雪", "Koyuki"], aliases: ["코유키"] },
   { terms: ["リーファ", "Leefa"], aliases: ["rifa", "리파"] },
   { terms: ["アッシュ", "Ash"], aliases: ["asshu", "애쉬"] },
   { terms: ["まりえる", "Mariel"], aliases: ["마리엘"] },
   { terms: ["薄荷", "Hakka"], aliases: ["하카"] },
-  { terms: ["ウルフェリア", "Wolferia"], aliases: ["urufueria", "울페리아", "울퍼리아"] },
+  { terms: ["ウルフェリア", "Wolferia"], aliases: ["urufueria", "울페리아", "울퍼리아"], productIds: ["2709610"] },
   { terms: ["ルーナリット", "Lunalitt"], aliases: ["runaritto", "루나릿", "루나리트"] },
   { terms: ["サフィー", "Sapphy"], aliases: ["safi", "사피"] },
   { terms: ["リア-アリス", "リアアリス", "RearAlice"], aliases: ["rear alice", "리아앨리스", "리어앨리스"] },
@@ -69,4 +69,18 @@ export const AVATAR_SEARCH_ALIASES = Object.freeze([
   { terms: ["Rexouium"], aliases: ["렉소이움", "렉소윰"] },
   { terms: ["Hyenid"], aliases: ["하이에니드"] },
   { terms: ["Wickerbeast"], aliases: ["wicker beast", "위커비스트"] },
-]);
+];
+
+function createAvatarProfileId(avatar) {
+  const latinName = [...avatar.terms, ...avatar.aliases]
+    .find((value) => /^[a-z0-9][a-z0-9 _-]*$/iu.test(value));
+  if (!latinName) throw new Error("아바타 프로필 ID를 만들 영문 표기가 필요합니다.");
+  return latinName.normalize("NFKC").toLocaleLowerCase("en-US").replace(/[^a-z0-9]+/gu, "");
+}
+
+export const AVATAR_SEARCH_ALIASES = Object.freeze(AVATAR_DEFINITIONS.map((avatar) => Object.freeze({
+  id: createAvatarProfileId(avatar),
+  terms: Object.freeze([...avatar.terms]),
+  aliases: Object.freeze([...avatar.aliases]),
+  productIds: Object.freeze([...(avatar.productIds || [])]),
+})));

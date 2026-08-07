@@ -55,9 +55,14 @@
         <section class="folder-section" aria-labelledby="folder-heading">
           <div class="sidebar-section-heading">
             <p class="sidebar-label" id="folder-heading">내 폴더</p>
-            <button class="mini-button" id="add-root-folder" type="button" aria-label="최상위 폴더 추가">
-              <span class="licon licon-plus" aria-hidden="true"></span>
-            </button>
+            <div class="sidebar-section-actions">
+              <button class="mini-button" id="add-root-folder" type="button" aria-label="최상위 폴더 추가" title="최상위 폴더 추가">
+                <span class="licon licon-plus" aria-hidden="true"></span>
+              </button>
+              <button class="mini-button" id="add-category" type="button" aria-label="카테고리 추가" title="카테고리 추가">
+                <span class="licon licon-folders" aria-hidden="true"></span>
+              </button>
+            </div>
           </div>
 
           <p class="folder-drop-hint" id="folder-drop-hint" aria-live="polite">카드를 폴더에 끌어 놓아 분류</p>
@@ -161,8 +166,8 @@
             <button class="language-toggle" id="language-toggle" type="button" aria-label="언어 변경" title="언어 변경">
               <span class="licon licon-languages" aria-hidden="true"></span>
             </button>
-            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="다크 모드로 전환" aria-pressed="false">
-              <span class="licon licon-moon" id="theme-toggle-icon" aria-hidden="true"></span>
+            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="테마 변경: 현재 라이트 모드, 다음 다크 모드" title="테마 변경: 현재 라이트 모드, 다음 다크 모드">
+              <span class="licon licon-sun" id="theme-toggle-icon" aria-hidden="true"></span>
             </button>
             <button class="sync-button" id="sync-button" type="button">
               <span class="sync-symbol licon licon-refresh-cw" aria-hidden="true"></span>
@@ -239,7 +244,6 @@
         <section class="item-grid" id="item-grid" aria-label="상품 목록"></section>
 
         <section class="empty-state" id="empty-state" hidden>
-          <div class="empty-monogram" aria-hidden="true">B</div>
           <h2 id="empty-title">라이브러리를 불러와 주세요</h2>
           <p id="empty-description">BOOTH에 로그인한 뒤 전체 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.</p>
           <div class="empty-actions">
@@ -256,6 +260,8 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+    <div class="context-menu" id="context-menu" role="menu" aria-label="빠른 메뉴" hidden></div>
+
     <dialog class="modal" id="folder-dialog">
       <form method="dialog" id="folder-form">
         <div class="modal-header">
@@ -269,14 +275,14 @@
         </div>
 
         <label class="form-field" id="folder-name-field">
-          <span>폴더 이름</span>
+          <span id="folder-name-label">폴더 이름</span>
           <input id="folder-name-input" type="text" maxlength="40" autocomplete="off" required>
         </label>
 
         <label class="form-field" id="folder-parent-field">
-          <span>이동할 위치</span>
+          <span id="folder-parent-label">이동할 위치</span>
           <select id="folder-parent-select"></select>
-          <small>폴더는 최대 3계층까지 만들 수 있어요.</small>
+          <small id="folder-parent-hint">카테고리는 폴더 3계층에 포함되지 않아요.</small>
         </label>
 
         <p class="form-error" id="folder-form-error" role="alert"></p>
@@ -299,13 +305,14 @@
             </button>
         </div>
         <p class="modal-product-name" id="assign-item-name"></p>
-        <label class="form-field">
-          <span>보관할 폴더</span>
-          <select id="assign-folder-select"></select>
-        </label>
+        <div class="form-field">
+          <span id="assign-folder-label">보관할 폴더</span>
+          <div class="folder-choice-list" id="assign-folder-list" role="group" aria-labelledby="assign-folder-label"></div>
+          <small>여러 폴더를 동시에 선택할 수 있어요. 모두 해제하면 미분류가 됩니다.</small>
+        </div>
         <div class="modal-actions">
           <button class="secondary-button" type="button" data-close-dialog="assign-dialog">취소</button>
-          <button class="primary-button" type="submit">적용</button>
+          <button class="primary-button" id="assign-submit" type="submit">적용</button>
         </div>
       </form>
     </dialog>
@@ -314,8 +321,8 @@
       <form method="dialog" id="confirm-form">
         <div class="modal-header">
           <div>
-            <p class="eyebrow">폴더 삭제</p>
-            <h2>이 폴더를 삭제할까요?</h2>
+            <p class="eyebrow" id="confirm-dialog-eyebrow">폴더 삭제</p>
+            <h2 id="confirm-dialog-title">이 폴더를 삭제할까요?</h2>
           </div>
             <button class="icon-button modal-close" type="button" data-close-dialog="confirm-dialog" aria-label="닫기">
               <span class="licon licon-x" aria-hidden="true"></span>
@@ -324,7 +331,7 @@
         <p class="confirm-copy" id="confirm-copy"></p>
         <div class="modal-actions">
           <button class="secondary-button" type="button" data-close-dialog="confirm-dialog">취소</button>
-          <button class="danger-button" type="submit">폴더 삭제</button>
+          <button class="danger-button" id="confirm-submit" type="submit">폴더 삭제</button>
         </div>
       </form>
     </dialog>
@@ -340,7 +347,7 @@
               <span class="licon licon-x" aria-hidden="true"></span>
             </button>
         </div>
-        <p class="confirm-copy">상품 목록, 즐겨찾기, 폴더와 분류 정보, 테마·언어 설정과 빨간약 결제 합계 캐시가 이 기기에서 즉시 삭제되고 BOOTH 계정 페이지 읽기 권한도 해제됩니다. BOOTH 계정과 구매 내역에는 영향을 주지 않으며, 삭제한 정리 정보는 복구할 수 없습니다.</p>
+        <p class="confirm-copy">상품 목록, 즐겨찾기, 카테고리·폴더와 분류 정보, 테마·언어 설정과 빨간약 결제 합계 캐시가 이 기기에서 즉시 삭제되고 BOOTH 계정·상품 페이지 읽기 권한도 해제됩니다. BOOTH 계정과 구매 내역에는 영향을 주지 않으며, 삭제한 정리 정보는 복구할 수 없습니다.</p>
         <div class="modal-actions">
           <button class="secondary-button" type="button" data-close-dialog="data-delete-dialog">취소</button>
           <button class="danger-button" type="submit">모든 로컬 데이터 삭제</button>
@@ -360,7 +367,7 @@
           </button>
         </div>
         <p class="confirm-copy" id="organization-restore-summary"></p>
-        <p class="organization-restore-warning">상품 목록은 그대로 유지되며 현재 폴더, 상품 배치와 즐겨찾기만 백업 내용으로 교체됩니다.</p>
+        <p class="organization-restore-warning">상품 목록은 그대로 유지되며 현재 카테고리, 폴더, 상품 배치와 즐겨찾기만 백업 내용으로 교체됩니다.</p>
         <div class="modal-actions">
           <button class="secondary-button" type="button" data-close-dialog="organization-restore-dialog">취소</button>
           <button class="primary-button" type="submit">복원하기</button>

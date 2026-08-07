@@ -3,6 +3,8 @@ import {
   parseBoothLibraryPage,
   parseBoothOrderDetail,
   parseBoothOrdersPage,
+  parseBoothProductIdentity,
+  parseBoothProductSupport,
 } from "../src/booth.js";
 
 const fixture = `
@@ -93,6 +95,27 @@ const orderDetailFixture = `
   </main></body></html>
 `;
 
+const productSupportFixture = `
+  <html><head><title>Ribbon Long Hair - BOOTH</title></head><body>
+    <section class="js-market-item-detail-description">
+      <h3>対応モデル</h3>
+      <p><a href="https://booth.pm/ja/items/8325804">商品ページを見る</a></p>
+      <p>森羅 https://booth.pm/ja/items/4707634</p>
+      <p><a href="https://booth.pm/ja/items/9876543">名前のない対応モデル</a></p>
+      <p>舞夜は対応予定です</p>
+      <h3>Contents</h3>
+      <p>Maya sample texture</p>
+    </section>
+  </body></html>
+`;
+
+const avatarProductFixture = `
+  <html><head>
+    <title>オリジナル3Dモデル「海咲-Misaki-」 - BOOTH</title>
+    <meta property="og:title" content="オリジナル3Dモデル「海咲-Misaki-」">
+  </head><body><h1>オリジナル3Dモデル「海咲-Misaki-」</h1></body></html>
+`;
+
 try {
   const result = parseBoothLibraryPage(fixture, {
     source: "purchased",
@@ -114,6 +137,14 @@ try {
   const orderDetail = parseBoothOrderDetail(orderDetailFixture, {
     orderId: "9001",
     pageUrl: "https://accounts.booth.pm/orders/9001",
+  });
+  const productSupport = parseBoothProductSupport(productSupportFixture, {
+    productId: "999001",
+    pageUrl: "https://booth.pm/ja/items/999001",
+  });
+  const avatarProduct = parseBoothProductIdentity(avatarProductFixture, {
+    productId: "9876543",
+    pageUrl: "https://booth.pm/ja/items/9876543",
   });
   let authDetected = false;
   try {
@@ -147,6 +178,10 @@ try {
       && orderDetail.orderId === "9001"
       && orderDetail.money.amount === 1280
       && orderDetail.money.currency === "JPY"
+      && productSupport.descriptionFound
+      && productSupport.supportedAvatarIds.join(",") === "misaki,shinra"
+      && productSupport.linkedProductIds.includes("9876543")
+      && avatarProduct.profileId === "misaki"
       && authDetected,
     authDetected,
     itemCount: result.items.length,
@@ -157,6 +192,8 @@ try {
     downloads,
     orders,
     orderDetail,
+    productSupport,
+    avatarProduct,
   });
 } catch (error) {
   document.getElementById("result").textContent = JSON.stringify({

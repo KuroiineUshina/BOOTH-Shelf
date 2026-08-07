@@ -1,4 +1,5 @@
 import {
+  buildAvatarProfileIds,
   buildLiteralSearchVariants,
   buildSearchVariants,
   normalizeSearchText,
@@ -22,6 +23,14 @@ export function itemHasSource(item, source) {
     ? item.sources
     : [item.source];
   return sources.includes(source);
+}
+
+export function getItemFolderIds(assignments, itemKey) {
+  const value = assignments?.[itemKey];
+  if (Array.isArray(value)) {
+    return [...new Set(value.filter((folderId) => typeof folderId === "string" && folderId))];
+  }
+  return typeof value === "string" && value ? [value] : [];
 }
 
 function searchIndexForItem(item) {
@@ -113,15 +122,16 @@ export function filterItems(items, filters = {}) {
   } = filters;
 
   const queryVariants = buildSearchVariants(query);
+  const queryAvatarIds = new Set(buildAvatarProfileIds(query));
   const favoriteSet = favorites instanceof Set ? favorites : new Set(favorites);
 
   return items.filter((item) => {
     if (source !== "all" && !itemHasSource(item, source)) return false;
     if (favoritesOnly && !favoriteSet.has(item.key)) return false;
 
-    const assignedFolderId = assignments[item.key] ?? null;
-    if (folderId === "unfiled" && assignedFolderId !== null) return false;
-    if (folderId !== "all" && folderId !== "unfiled" && assignedFolderId !== folderId) {
+    const assignedFolderIds = getItemFolderIds(assignments, item.key);
+    if (folderId === "unfiled" && assignedFolderIds.length) return false;
+    if (folderId !== "all" && folderId !== "unfiled" && !assignedFolderIds.includes(folderId)) {
       return false;
     }
 
@@ -133,11 +143,14 @@ export function filterItems(items, filters = {}) {
     const downloadMatches = searchIndex.downloads.some(({ variants }) => (
       variantsMatch(queryVariants, variants)
     ));
+    const supportMatches = queryAvatarIds.size > 0
+      && (Array.isArray(item.supportedAvatarIds) ? item.supportedAvatarIds : [])
+        .some((profileId) => queryAvatarIds.has(profileId));
 
     if (searchField === "title") return titleMatches;
     if (searchField === "seller") return sellerMatches;
     if (searchField === "download") return downloadMatches;
-    return titleMatches || sellerMatches || downloadMatches;
+    return titleMatches || sellerMatches || downloadMatches || supportMatches;
   });
 }
 
@@ -265,18 +278,52 @@ export function setItemsFolderAssignment(items, folders, assignments, itemKeys, 
     throw new Error("폴더를 찾을 수 없어요.");
   }
 
-  const selectedKeys = new Set(uniqueKeys);
   const nextAssignments = Object.fromEntries(
-    Object.entries(assignments ?? {}).filter(([assignedItemKey]) => !selectedKeys.has(assignedItemKey)),
+    Object.entries(assignments ?? {}).map(([assignedItemKey, folderIds]) => [
+      assignedItemKey,
+      getItemFolderIds(assignments, assignedItemKey),
+    ]).filter(([, folderIds]) => folderIds.length),
   );
-  if (normalizedFolderId) {
-    for (const itemKey of uniqueKeys) nextAssignments[itemKey] = normalizedFolderId;
+  for (const itemKey of uniqueKeys) {
+    if (!normalizedFolderId) {
+      delete nextAssignments[itemKey];
+      continue;
+    }
+    nextAssignments[itemKey] = [...new Set([
+      ...getItemFolderIds(assignments, itemKey),
+      normalizedFolderId,
+    ])];
   }
   return nextAssignments;
 }
 
 export function setItemFolderAssignment(items, folders, assignments, itemKey, folderId) {
-  return setItemsFolderAssignment(items, folders, assignments, [itemKey], folderId);
+  return setItemFolderAssignments(
+    items,
+    folders,
+    assignments,
+    itemKey,
+    folderId ? [folderId] : [],
+  );
+}
+
+export function setItemFolderAssignments(items, folders, assignments, itemKey, folderIds) {
+  if (!items.some((item) => item.key === itemKey)) throw new Error("상품을 찾을 수 없어요.");
+  const requestedFolderIds = [...new Set(Array.isArray(folderIds) ? folderIds.filter(Boolean) : [])];
+  const availableFolderIds = new Set(folders.map((folder) => folder.id));
+  if (requestedFolderIds.some((folderId) => !availableFolderIds.has(folderId))) {
+    throw new Error("폴더를 찾을 수 없어요.");
+  }
+
+  const nextAssignments = Object.fromEntries(
+    Object.entries(assignments ?? {}).map(([assignedItemKey]) => [
+      assignedItemKey,
+      getItemFolderIds(assignments, assignedItemKey),
+    ]).filter(([, assignedFolderIds]) => assignedFolderIds.length),
+  );
+  if (requestedFolderIds.length) nextAssignments[itemKey] = requestedFolderIds;
+  else delete nextAssignments[itemKey];
+  return nextAssignments;
 }
 
 export function folderDepth(folders, folderId) {
@@ -298,6 +345,70 @@ export function folderDepth(folders, folderId) {
   }
 
   return depth;
+}
+
+export function createCategory(categories, { name, id, createdAt }) {
+  const trimmedName = String(name ?? "").trim();
+  if (!trimmedName) throw new Error("카테고리 이름을 입력해 주세요.");
+  if (trimmedName.length > 40) throw new Error("카테고리 이름은 40자 이하로 입력해 주세요.");
+  if (categories.some((category) => normalizeText(category.name) === normalizeText(trimmedName))) {
+    throw new Error("동일한 이름의 카테고리가 있어요.");
+  }
+
+  return [
+    ...categories,
+    {
+      id: id ?? crypto.randomUUID(),
+      name: trimmedName,
+      order: categories.length,
+      collapsed: false,
+      createdAt: createdAt ?? new Date().toISOString(),
+    },
+  ];
+}
+
+export function renameCategory(categories, categoryId, name) {
+  if (!categories.some((category) => category.id === categoryId)) {
+    throw new Error("카테고리를 찾을 수 없어요.");
+  }
+  const trimmedName = String(name ?? "").trim();
+  if (!trimmedName) throw new Error("카테고리 이름을 입력해 주세요.");
+  if (trimmedName.length > 40) throw new Error("카테고리 이름은 40자 이하로 입력해 주세요.");
+  if (categories.some((category) => (
+    category.id !== categoryId
+      && normalizeText(category.name) === normalizeText(trimmedName)
+  ))) {
+    throw new Error("동일한 이름의 카테고리가 있어요.");
+  }
+
+  return categories.map((category) => (
+    category.id === categoryId ? { ...category, name: trimmedName } : category
+  ));
+}
+
+export function toggleCategoryCollapsed(categories, categoryId) {
+  if (!categories.some((category) => category.id === categoryId)) {
+    throw new Error("카테고리를 찾을 수 없어요.");
+  }
+  return categories.map((category) => (
+    category.id === categoryId
+      ? { ...category, collapsed: !category.collapsed }
+      : category
+  ));
+}
+
+export function deleteCategoryAndReleaseFolders(categories, folders, categoryId) {
+  if (!categories.some((category) => category.id === categoryId)) {
+    throw new Error("카테고리를 찾을 수 없어요.");
+  }
+  return {
+    categories: categories.filter((category) => category.id !== categoryId),
+    folders: folders.map((folder) => (
+      !folder.parentId && folder.categoryId === categoryId
+        ? { ...folder, categoryId: null }
+        : folder
+    )),
+  };
 }
 
 export function getDescendantIds(folders, folderId) {
@@ -356,7 +467,13 @@ export function canMoveFolder(folders, folderId, newParentId) {
     && parentDepth + height <= MAX_FOLDER_DEPTH;
 }
 
-export function createFolder(folders, { name, parentId = null, id, createdAt }) {
+export function createFolder(folders, {
+  name,
+  parentId = null,
+  categoryId = null,
+  id,
+  createdAt,
+}) {
   const trimmedName = String(name ?? "").trim();
   if (!trimmedName) throw new Error("폴더 이름을 입력해 주세요.");
   if (trimmedName.length > 40) throw new Error("폴더 이름은 40자 이하로 입력해 주세요.");
@@ -364,7 +481,11 @@ export function createFolder(folders, { name, parentId = null, id, createdAt }) 
     throw new Error("폴더는 3계층까지만 만들 수 있어요.");
   }
 
-  const siblings = folders.filter((folder) => (folder.parentId ?? null) === parentId);
+  const normalizedCategoryId = parentId ? null : (categoryId || null);
+  const siblings = folders.filter((folder) => (
+    (folder.parentId ?? null) === parentId
+      && (Boolean(parentId) || (folder.categoryId ?? null) === normalizedCategoryId)
+  ));
   if (siblings.some((folder) => normalizeText(folder.name) === normalizeText(trimmedName))) {
     throw new Error("같은 위치에 동일한 이름의 폴더가 있어요.");
   }
@@ -375,6 +496,7 @@ export function createFolder(folders, { name, parentId = null, id, createdAt }) 
       id: id ?? crypto.randomUUID(),
       name: trimmedName,
       parentId,
+      categoryId: normalizedCategoryId,
       order: siblings.length,
       createdAt: createdAt ?? new Date().toISOString(),
     },
@@ -392,6 +514,8 @@ export function renameFolder(folders, folderId, name) {
   const hasDuplicate = folders.some((folder) => (
     folder.id !== folderId
       && (folder.parentId ?? null) === (current.parentId ?? null)
+      && (Boolean(current.parentId)
+        || (folder.categoryId ?? null) === (current.categoryId ?? null))
       && normalizeText(folder.name) === normalizeText(trimmedName)
   ));
   if (hasDuplicate) throw new Error("같은 위치에 동일한 이름의 폴더가 있어요.");
@@ -401,19 +525,22 @@ export function renameFolder(folders, folderId, name) {
   ));
 }
 
-export function moveFolder(folders, folderId, newParentId) {
+export function moveFolder(folders, folderId, newParentId, newCategoryId = null) {
   const parentId = newParentId || null;
   if (!canMoveFolder(folders, folderId, parentId)) {
     throw new Error("해당 위치로 폴더를 이동할 수 없어요.");
   }
 
+  const categoryId = parentId ? null : (newCategoryId || null);
   const siblingCount = folders.filter((folder) => (
-    folder.id !== folderId && (folder.parentId ?? null) === parentId
+    folder.id !== folderId
+      && (folder.parentId ?? null) === parentId
+      && (Boolean(parentId) || (folder.categoryId ?? null) === categoryId)
   )).length;
 
   return folders.map((folder) => (
     folder.id === folderId
-      ? { ...folder, parentId, order: siblingCount }
+      ? { ...folder, parentId, categoryId, order: siblingCount }
       : folder
   ));
 }
@@ -423,19 +550,25 @@ export function deleteFolderAndPromote(folders, assignments, folderId) {
   if (!target) throw new Error("폴더를 찾을 수 없어요.");
 
   const promotedParentId = target.parentId ?? null;
+  const promotedCategoryId = promotedParentId ? null : (target.categoryId ?? null);
   const nextFolders = folders
     .filter((folder) => folder.id !== folderId)
     .map((folder) => (
       folder.parentId === folderId
-        ? { ...folder, parentId: promotedParentId }
+        ? { ...folder, parentId: promotedParentId, categoryId: promotedCategoryId }
         : folder
     ));
 
   const nextAssignments = Object.fromEntries(
-    Object.entries(assignments).map(([itemKey, assignedFolderId]) => [
-      itemKey,
-      assignedFolderId === folderId ? promotedParentId : assignedFolderId,
-    ]),
+    Object.keys(assignments ?? {}).map((itemKey) => {
+      const nextFolderIds = getItemFolderIds(assignments, itemKey)
+        .flatMap((assignedFolderId) => (
+          assignedFolderId === folderId
+            ? (promotedParentId ? [promotedParentId] : [])
+            : [assignedFolderId]
+        ));
+      return [itemKey, [...new Set(nextFolderIds)]];
+    }).filter(([, assignedFolderIds]) => assignedFolderIds.length),
   );
 
   return { folders: nextFolders, assignments: nextAssignments };

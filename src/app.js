@@ -2,23 +2,29 @@ import {
   MAX_FOLDER_DEPTH,
   buildFolderTree,
   canMoveFolder,
+  createCategory,
   createFolder,
+  deleteCategoryAndReleaseFolders,
   deleteFolderAndPromote,
   filterItems,
   folderDepth,
   getFolderPath,
+  getItemFolderIds,
   itemHasSource,
   matchingDownloadFiles,
   moveFolder,
+  renameCategory,
   renameFolder,
   setItemDownloadFiles,
-  setItemFolderAssignment,
+  setItemFolderAssignments,
   setItemsFolderAssignment,
   sortItems,
+  toggleCategoryCollapsed,
 } from "./domain.js";
 import {
   BoothAuthError,
   calculateBoothSpending,
+  indexBoothProductSupport,
   loadBoothDownloadOptions,
   syncBoothLibrary,
 } from "./booth.js";
@@ -54,7 +60,8 @@ const CARD_LAYOUT_DURATION_MS = 260;
 const IS_DEMO = new URLSearchParams(window.location.search).has("demo");
 const STATE_LOCK_NAME = "booth-shelf-state-write";
 const SPENDING_LOCK_NAME = "booth-shelf-spending-scan";
-const BOOTH_HOST_PERMISSION = "https://accounts.booth.pm/*";
+const BOOTH_ACCOUNT_PERMISSION = "https://accounts.booth.pm/*";
+const BOOTH_PRODUCT_PERMISSION = "https://booth.pm/*";
 const CARD_FLIP_FOCUS_DELAY_MS = 360;
 const DRAG_CLICK_SUPPRESSION_MS = 320;
 const POINTER_DRAG_THRESHOLD_PX = 7;
@@ -67,6 +74,18 @@ const LOCALE_NAMES = Object.freeze({
   en: "English",
   ja: "日本語",
 });
+const THEME_SEQUENCE = Object.freeze(["light", "dark", "system"]);
+const THEME_LABELS = Object.freeze({
+  light: "라이트 모드",
+  dark: "다크 모드",
+  system: "시스템 설정",
+});
+const THEME_ICONS = Object.freeze({
+  light: "sun",
+  dark: "moon",
+  system: "monitor",
+});
+const SYSTEM_THEME_MEDIA = window.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
 
 const ui = {
   source: "all",
@@ -79,7 +98,12 @@ const ui = {
   visibleLimit: PAGE_SIZE,
   selectedFolderId: null,
   folderDialogMode: null,
+  folderDialogFolderId: null,
+  folderDialogCategoryId: null,
   assigningItemKey: null,
+  selectedCategoryId: null,
+  confirmDeleteType: null,
+  confirmDeleteFolderId: null,
   dropSuccessFolderId: null,
   syncing: false,
   calculatingSpending: false,
@@ -92,6 +116,8 @@ let preferences;
 let spendingSummary;
 let renderTimer;
 let dropSuccessTimer;
+let contextMenuCloseTimer;
+let contextMenuReturnFocus;
 let loadMoreObserver;
 let themeSwitchFrame;
 let hasShownCards = false;
@@ -118,7 +144,7 @@ const refs = Object.fromEntries(
   [
     "sidebar", "sidebar-close", "sidebar-open", "sidebar-backdrop",
     "all-count", "purchased-count", "gift-count", "free-count", "favorites-count",
-    "favorites-nav", "add-root-folder", "all-folders", "unfiled-folder",
+    "favorites-nav", "add-root-folder", "add-category", "all-folders", "unfiled-folder",
     "unfiled-count", "folder-drop-hint", "folder-tree", "folder-actions", "add-child-folder",
     "rename-folder", "move-folder", "delete-folder", "search-input",
     "search-field", "sync-button", "view-eyebrow", "view-title",
@@ -128,12 +154,13 @@ const refs = Object.fromEntries(
     "result-summary", "selection-summary", "selection-count", "selection-clear",
     "clear-filter", "item-grid", "empty-state",
     "empty-title", "empty-description", "empty-sync-button",
-    "empty-login-link", "load-more-sentinel", "toast",
+    "empty-login-link", "load-more-sentinel", "toast", "context-menu",
     "folder-dialog", "folder-form", "folder-dialog-title",
-    "folder-name-field", "folder-name-input", "folder-parent-field",
-    "folder-parent-select", "folder-form-error", "folder-submit",
+    "folder-name-field", "folder-name-label", "folder-name-input", "folder-parent-field",
+    "folder-parent-label", "folder-parent-select", "folder-parent-hint", "folder-form-error", "folder-submit",
     "assign-dialog", "assign-form", "assign-item-name",
-    "assign-folder-select", "confirm-dialog", "confirm-form", "confirm-copy",
+    "assign-folder-list", "assign-submit", "confirm-dialog", "confirm-form", "confirm-copy",
+    "confirm-dialog-eyebrow", "confirm-dialog-title", "confirm-submit",
     "clear-local-data", "organization-backup-actions",
     "export-organization-data", "import-organization-data",
     "organization-backup-file", "organization-restore-dialog",
@@ -150,12 +177,16 @@ const refs = Object.fromEntries(
 );
 
 function demoState() {
+  const categories = [
+    { id: "avatar-assets", name: "아바타 에셋", order: 0, collapsed: false, createdAt: "2025-12-30T00:00:00.000Z" },
+    { id: "utilities", name: "도구와 월드", order: 1, collapsed: false, createdAt: "2025-12-31T00:00:00.000Z" },
+  ];
   const folders = [
-    { id: "avatars", name: "아바타", parentId: null, order: 0, createdAt: "2026-01-01T00:00:00.000Z" },
-    { id: "clothes", name: "의상", parentId: "avatars", order: 0, createdAt: "2026-01-02T00:00:00.000Z" },
-    { id: "casual", name: "캐주얼", parentId: "clothes", order: 0, createdAt: "2026-01-03T00:00:00.000Z" },
-    { id: "tools", name: "툴", parentId: null, order: 1, createdAt: "2026-01-04T00:00:00.000Z" },
-    { id: "world", name: "월드 소품", parentId: null, order: 2, createdAt: "2026-01-05T00:00:00.000Z" },
+    { id: "avatars", name: "아바타", parentId: null, categoryId: "avatar-assets", order: 0, createdAt: "2026-01-01T00:00:00.000Z" },
+    { id: "clothes", name: "의상", parentId: "avatars", categoryId: null, order: 0, createdAt: "2026-01-02T00:00:00.000Z" },
+    { id: "casual", name: "캐주얼", parentId: "clothes", categoryId: null, order: 0, createdAt: "2026-01-03T00:00:00.000Z" },
+    { id: "tools", name: "툴", parentId: null, categoryId: "utilities", order: 0, createdAt: "2026-01-04T00:00:00.000Z" },
+    { id: "world", name: "월드 소품", parentId: null, categoryId: "utilities", order: 1, createdAt: "2026-01-05T00:00:00.000Z" },
   ];
 
   const samples = [
@@ -218,17 +249,18 @@ function demoState() {
   }));
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     items,
+    categories,
     folders,
     favorites: [items[0].key, items[4].key, items[8].key],
     assignments: {
-      [items[0].key]: "clothes",
-      [items[3].key]: "avatars",
-      [items[5].key]: "tools",
-      [items[6].key]: "casual",
-      [items[9].key]: "world",
-      [items[11].key]: "tools",
+      [items[0].key]: ["clothes", "casual"],
+      [items[3].key]: ["avatars"],
+      [items[5].key]: ["tools"],
+      [items[6].key]: ["casual"],
+      [items[9].key]: ["world"],
+      [items[11].key]: ["tools"],
     },
     lastSyncedAt: "2026-07-19T06:20:00.000Z",
   };
@@ -273,20 +305,38 @@ function formatMoney(amount, currency = "JPY") {
   return `${formatLocalizedNumber(value, { maximumFractionDigits: 2 })} ${currency}`;
 }
 
+function normalizeThemePreference(theme) {
+  return THEME_SEQUENCE.includes(theme) ? theme : "light";
+}
+
 function applyTheme(theme) {
-  const normalized = theme === "dark" ? "dark" : "light";
+  const preference = normalizeThemePreference(theme);
+  const resolvedTheme = preference === "system"
+    ? (SYSTEM_THEME_MEDIA?.matches ? "dark" : "light")
+    : preference;
+  const currentIndex = THEME_SEQUENCE.indexOf(preference);
+  const nextTheme = THEME_SEQUENCE[(currentIndex + 1) % THEME_SEQUENCE.length];
+  const label = t("테마 변경: 현재 {current}, 다음 {next}", {
+    current: t(THEME_LABELS[preference]),
+    next: t(THEME_LABELS[nextTheme]),
+  });
   const root = document.documentElement;
   window.cancelAnimationFrame(themeSwitchFrame);
   root.classList.add("is-theme-switching");
-  root.dataset.theme = normalized;
-  const dark = normalized === "dark";
-  refs["theme-toggle"].setAttribute("aria-pressed", String(dark));
-  refs["theme-toggle"].setAttribute("aria-label", t(dark ? "라이트 모드로 전환" : "다크 모드로 전환"));
-  setLucideIcon(refs["theme-toggle-icon"], dark ? "sun" : "moon");
+  root.dataset.theme = resolvedTheme;
+  root.dataset.themePreference = preference;
+  refs["theme-toggle"].dataset.themePreference = preference;
+  refs["theme-toggle"].setAttribute("aria-label", label);
+  refs["theme-toggle"].title = label;
+  setLucideIcon(refs["theme-toggle-icon"], THEME_ICONS[preference]);
   void root.offsetWidth;
   themeSwitchFrame = window.requestAnimationFrame(() => {
     root.classList.remove("is-theme-switching");
   });
+}
+
+function handleSystemThemeChange() {
+  if (preferences?.theme === "system") applyTheme("system");
 }
 
 function applyLocalePreference(localePreference) {
@@ -311,7 +361,9 @@ function updateLanguageToggle(locale = getLocale()) {
 }
 
 async function toggleTheme() {
-  const nextTheme = preferences?.theme === "dark" ? "light" : "dark";
+  const currentTheme = normalizeThemePreference(preferences?.theme);
+  const currentIndex = THEME_SEQUENCE.indexOf(currentTheme);
+  const nextTheme = THEME_SEQUENCE[(currentIndex + 1) % THEME_SEQUENCE.length];
   preferences = { ...preferences, theme: nextTheme };
   applyTheme(nextTheme);
   try {
@@ -403,14 +455,21 @@ async function runWithSpendingLock(task) {
   );
 }
 
-async function requestBoothAccess() {
+async function requestBoothAccess({ productPages = false } = {}) {
   if (typeof chrome === "undefined" || !chrome.permissions?.request) return false;
-  return chrome.permissions.request({ origins: [BOOTH_HOST_PERMISSION] });
+  return chrome.permissions.request({
+    origins: [
+      BOOTH_ACCOUNT_PERMISSION,
+      ...(productPages ? [BOOTH_PRODUCT_PERMISSION] : []),
+    ],
+  });
 }
 
 async function removeBoothAccess() {
   if (typeof chrome === "undefined" || !chrome.permissions?.remove) return false;
-  return chrome.permissions.remove({ origins: [BOOTH_HOST_PERMISSION] });
+  return chrome.permissions.remove({
+    origins: [BOOTH_ACCOUNT_PERMISSION, BOOTH_PRODUCT_PERMISSION],
+  });
 }
 
 function showToast(message, tone = "default") {
@@ -581,6 +640,10 @@ function getSelectedFolder() {
   return state.folders.find((folder) => folder.id === ui.selectedFolderId) ?? null;
 }
 
+function getSelectedCategory() {
+  return state.categories.find((category) => category.id === ui.selectedCategoryId) ?? null;
+}
+
 function getViewCopy() {
   if (ui.favoritesOnly) {
     return {
@@ -601,8 +664,11 @@ function getViewCopy() {
   if (ui.folderId !== "all") {
     const folder = state.folders.find((candidate) => candidate.id === ui.folderId);
     const path = folder ? getFolderPath(state.folders, folder.id) : [];
+    const category = path.length
+      ? state.categories.find((candidate) => candidate.id === path[0].categoryId)
+      : null;
     return {
-      eyebrow: path.slice(0, -1).map((entry) => entry.name).join(" / ") || t("내 폴더"),
+      eyebrow: [category?.name, ...path.slice(0, -1).map((entry) => entry.name)].filter(Boolean).join(" / ") || t("내 폴더"),
       title: folder?.name || t("폴더"),
       description: t("이 폴더에 분류한 상품을 보여드려요."),
     };
@@ -644,7 +710,9 @@ function renderNavigation() {
   const giftCount = state.items.filter((item) => itemHasSource(item, "gift")).length;
   const freeCount = state.items.filter((item) => itemHasSource(item, "free")).length;
   const favoriteCount = state.favorites.filter((key) => state.items.some((item) => item.key === key)).length;
-  const unfiledCount = state.items.filter((item) => !state.assignments[item.key]).length;
+  const unfiledCount = state.items.filter(
+    (item) => !getItemFolderIds(state.assignments, item.key).length,
+  ).length;
 
   refs["all-count"].textContent = formatCount(state.items.length);
   refs["purchased-count"].textContent = formatCount(purchasedCount);
@@ -663,7 +731,26 @@ function renderNavigation() {
 }
 
 function directFolderCount(folderId) {
-  return state.items.filter((item) => state.assignments[item.key] === folderId).length;
+  return state.items.filter(
+    (item) => getItemFolderIds(state.assignments, item.key).includes(folderId),
+  ).length;
+}
+
+function getFolderCategory(folderId) {
+  const rootFolder = getFolderPath(state.folders, folderId)[0];
+  return rootFolder
+    ? state.categories.find((category) => category.id === rootFolder.categoryId) ?? null
+    : null;
+}
+
+function getFolderDisplayPath(folderId) {
+  const category = getFolderCategory(folderId);
+  const path = getFolderPath(state.folders, folderId).map((folder) => folder.name);
+  return [category?.name, ...path].filter(Boolean);
+}
+
+function countFolderNodes(branch) {
+  return branch.reduce((count, folder) => count + 1 + countFolderNodes(folder.children), 0);
 }
 
 function renderFolderBranch(branch, depth = 1) {
@@ -702,8 +789,65 @@ function renderFolderBranch(branch, depth = 1) {
   return fragment;
 }
 
+function renderCategory(category, roots) {
+  const wrapper = element("section", {
+    className: `folder-category${category.collapsed ? " is-collapsed" : ""}`,
+    attrs: { "data-category-wrapper-id": category.id },
+  });
+  const row = element("button", {
+    className: "folder-category-row",
+    attrs: {
+      type: "button",
+      "data-category-id": category.id,
+      "aria-expanded": String(!category.collapsed),
+      title: t("{name} 카테고리 접기 또는 펼치기", { name: category.name }),
+    },
+  });
+  row.append(
+    lucideIcon("chevron-right", "folder-category-chevron"),
+    lucideIcon("folders", "folder-category-glyph"),
+    element("span", { className: "folder-category-name", text: category.name }),
+    element("span", { className: "folder-category-count", text: formatCount(countFolderNodes(roots)) }),
+  );
+
+  const contents = element("div", {
+    className: "folder-category-contents",
+    attrs: { "aria-hidden": String(category.collapsed) },
+  });
+  contents.inert = category.collapsed;
+  const inner = element("div", { className: "folder-category-contents-inner" });
+  if (roots.length) {
+    inner.append(renderFolderBranch(roots));
+  } else {
+    inner.append(element("p", { className: "folder-category-empty", text: t("아직 폴더가 없어요.") }));
+  }
+  contents.append(inner);
+  wrapper.append(row, contents);
+  return wrapper;
+}
+
 function renderFolders() {
-  refs["folder-tree"].replaceChildren(renderFolderBranch(buildFolderTree(state.folders)));
+  const tree = buildFolderTree(state.folders);
+  const fragment = document.createDocumentFragment();
+  const orderedCategories = [...state.categories].sort((left, right) => (
+    (left.order ?? 0) - (right.order ?? 0)
+      || left.name.localeCompare(right.name, ["ko", "ja", "en"], { numeric: true })
+  ));
+  for (const category of orderedCategories) {
+    fragment.append(renderCategory(
+      category,
+      tree.filter((folder) => folder.categoryId === category.id),
+    ));
+  }
+  const uncategorizedRoots = tree.filter((folder) => !folder.categoryId);
+  if (orderedCategories.length && uncategorizedRoots.length) {
+    fragment.append(element("p", {
+      className: "folder-uncategorized-label",
+      text: t("카테고리 없음"),
+    }));
+  }
+  fragment.append(renderFolderBranch(uncategorizedRoots));
+  refs["folder-tree"].replaceChildren(fragment);
   if (!document.body.classList.contains("is-item-dragging")) {
     refs["folder-drop-hint"].textContent = t("카드를 폴더에 끌어 놓아 분류");
   }
@@ -939,7 +1083,7 @@ function createCard(item, index) {
   const isPurchased = itemHasSource(item, "purchased");
   const isGift = itemHasSource(item, "gift");
   const isFree = itemHasSource(item, "free");
-  const assignedFolderId = state.assignments[item.key];
+  const assignedFolderIds = getItemFolderIds(state.assignments, item.key);
   const sourceLabels = [
     isPurchased ? t("구매") : "",
     isGift ? t("선물") : "",
@@ -1014,21 +1158,40 @@ function createCard(item, index) {
   if (downloadMatch) content.append(downloadMatch);
   content.append(revealButton);
 
-  if (assignedFolderId) {
-    const path = getFolderPath(state.folders, assignedFolderId);
-    if (path.length) {
-      content.append(element("p", {
+  const assignedFolderPaths = assignedFolderIds
+    .map((folderId) => getFolderDisplayPath(folderId))
+    .filter((path) => path.length)
+    .sort((left, right) => left.join("/").localeCompare(
+      right.join("/"),
+      ["ko", "ja", "en"],
+      { numeric: true },
+    ));
+  if (assignedFolderPaths.length) {
+    const chipList = element("div", { className: "folder-chip-list" });
+    for (const path of assignedFolderPaths.slice(0, 2)) {
+      const label = path.join(" / ");
+      chipList.append(element("span", {
         className: "folder-chip",
-        text: path.map((folder) => folder.name).join(" / "),
-        attrs: { title: path.map((folder) => folder.name).join(" / ") },
+        text: label,
+        attrs: { title: label },
       }));
     }
+    if (assignedFolderPaths.length > 2) {
+      const remainingLabels = assignedFolderPaths.slice(2)
+        .map((path) => path.join(" / "));
+      chipList.append(element("span", {
+        className: "folder-chip folder-chip-more",
+        text: `+${formatCount(remainingLabels.length)}`,
+        attrs: { title: remainingLabels.join("\n") },
+      }));
+    }
+    content.append(chipList);
   }
 
   const actions = element("div", { className: "item-actions" });
   const assignButton = element("button", {
     className: "organize-button",
-    text: t(assignedFolderId ? "폴더 변경" : "폴더에 넣기"),
+    text: t(assignedFolderIds.length ? "폴더 관리" : "폴더에 넣기"),
     attrs: { type: "button", "data-assign-key": item.key },
   });
   const isFavorite = state.favorites.includes(item.key);
@@ -1847,6 +2010,7 @@ function setSource(source) {
   ui.favoritesOnly = false;
   ui.folderId = "all";
   ui.selectedFolderId = null;
+  ui.selectedCategoryId = null;
   resetResultWindow();
   closeSidebar();
   render();
@@ -1856,6 +2020,7 @@ function selectFolder(folderId) {
   selectedItemKeys.clear();
   ui.folderId = folderId;
   ui.selectedFolderId = folderId === "all" || folderId === "unfiled" ? null : folderId;
+  ui.selectedCategoryId = null;
   ui.favoritesOnly = false;
   resetResultWindow();
   closeSidebar();
@@ -1873,6 +2038,7 @@ function clearFilters() {
     sortKind: "purchase",
     sortDirection: "asc",
     selectedFolderId: null,
+    selectedCategoryId: null,
     visibleLimit: PAGE_SIZE,
   });
   render({ reconcileItems: true, animateItems: true });
@@ -1906,16 +2072,30 @@ function setSyncPanel({ message, detail = "", percent = 0, tone = "default", log
 function mergeSyncedItems(items, syncedAt) {
   downloadCardStates.clear();
   selectedItemKeys.clear();
-  const keys = new Set(items.map((item) => item.key));
+  const previousItems = new Map(state.items.map((item) => [item.key, item]));
+  const mergedItems = items.map((item) => {
+    const previous = previousItems.get(item.key);
+    if (!previous?.supportIndexedAt) return item;
+    return {
+      ...item,
+      supportedAvatarIds: [...(previous.supportedAvatarIds || [])],
+      supportIndexedAt: previous.supportIndexedAt,
+      supportIndexVersion: previous.supportIndexVersion,
+    };
+  });
+  const keys = new Set(mergedItems.map((item) => item.key));
   state = {
     ...state,
-    items,
+    items: mergedItems,
     lastSyncedAt: syncedAt,
     favorites: state.favorites.filter((key) => keys.has(key)),
     assignments: Object.fromEntries(
-      Object.entries(state.assignments).filter(([key, folderId]) => (
-        keys.has(key) && (!folderId || state.folders.some((folder) => folder.id === folderId))
-      )),
+      Object.keys(state.assignments).map((key) => [
+        key,
+        getItemFolderIds(state.assignments, key).filter(
+          (folderId) => state.folders.some((folder) => folder.id === folderId),
+        ),
+      ]).filter(([key, folderIds]) => keys.has(key) && folderIds.length),
     ),
   };
 }
@@ -1955,9 +2135,9 @@ async function syncLibrary() {
 
   try {
     if (!IS_DEMO) {
-      const permissionGranted = await requestBoothAccess();
+      const permissionGranted = await requestBoothAccess({ productPages: true });
       if (!permissionGranted) {
-        const error = new Error(t("라이브러리를 읽으려면 BOOTH 계정 페이지 접근을 허용해 주세요."));
+        const error = new Error(t("라이브러리와 상품 설명을 읽으려면 BOOTH 계정 및 상품 페이지 접근을 허용해 주세요."));
         error.code = "PERMISSION_REQUIRED";
         throw error;
       }
@@ -1971,7 +2151,7 @@ async function syncLibrary() {
       }
 
       const result = await syncBoothLibrary(({ message, completed, total }) => {
-        const percent = total ? Math.round((completed / total) * 100) : 8;
+        const percent = total ? Math.round(8 + (completed / total) * 44) : 8;
         setSyncPanel({
           message,
           detail: total ? t("{completed} / {total} 페이지", { completed, total }) : "",
@@ -1980,19 +2160,44 @@ async function syncLibrary() {
       });
       mergeSyncedItems(result.items, result.syncedAt);
       await persistState({ alreadyLocked: true });
+
+      const supportResult = await indexBoothProductSupport(state.items, {
+        onProgress: ({ message, completed, total }) => {
+          const percent = total ? Math.round(55 + (completed / total) * 43) : 98;
+          setSyncPanel({
+            message,
+            detail: total ? t("{completed} / {total}개 상품", { completed, total }) : "",
+            percent,
+          });
+        },
+        onCheckpoint: async (items) => {
+          state = { ...state, items };
+          await persistState({ alreadyLocked: true });
+        },
+      });
+      state = { ...state, items: supportResult.items };
+      await persistState({ alreadyLocked: true });
       resetResultWindow();
       render();
+      const supportRetryDetail = supportResult.failedCount
+        ? t(" · {failed}개 상품 설명은 다음 동기화에서 다시 확인", {
+          failed: formatCount(supportResult.failedCount),
+        })
+        : "";
       setSyncPanel({
         message: t("동기화가 끝났어요"),
-        detail: t("{items}개 상품과 {files}개 다운로드 파일명을 이 기기에 저장했습니다.", {
+        detail: `${t("{items}개 상품 · {files}개 파일명 · {supported}개 상품의 지원 아바타 정보를 저장했습니다.", {
           items: formatCount(result.items.length),
           files: formatCount(result.downloadFileCount),
-        }),
+          supported: formatCount(supportResult.supportedProductCount),
+        })}${supportRetryDetail}`,
         percent: 100,
-        tone: "success",
+        tone: supportResult.failedCount ? "default" : "success",
       });
       window.setTimeout(() => setSyncPanel({ hidden: true }), 4200);
-      showToast(t("라이브러리를 최신 상태로 업데이트했어요."));
+      showToast(supportResult.failedCount
+        ? t("일부 상품 설명은 다음 동기화에서 다시 확인해요.")
+        : t("라이브러리를 최신 상태로 업데이트했어요."));
     });
   } catch (error) {
     const authError = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
@@ -2009,7 +2214,7 @@ async function syncLibrary() {
       detail: authError
         ? t("같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요.")
         : permissionError
-          ? t("전체 동기화를 다시 누르고 계정 페이지 읽기 권한을 허용해 주세요.")
+          ? t("전체 동기화를 다시 누르고 BOOTH 계정 및 상품 페이지 읽기 권한을 허용해 주세요.")
         : busyError
           ? t("진행 중인 작업이 끝난 뒤 다시 시도해 주세요.")
           : (error.message || t("잠시 후 다시 시도해 주세요.")),
@@ -2094,7 +2299,8 @@ async function prepareOrganizationRestore(event) {
     const backup = JSON.parse(content);
     const preview = restoreOrganizationBackup(state, backup);
     pendingOrganizationBackup = backup;
-    const summary = t("{folders}개 폴더, {assignments}개 상품 배치, {favorites}개 즐겨찾기를 복원합니다.", {
+    const summary = t("{categories}개 카테고리, {folders}개 폴더, {assignments}개 상품 배치, {favorites}개 즐겨찾기를 복원합니다.", {
+      categories: formatCount(preview.stats.categoryCount),
       folders: formatCount(preview.stats.folderCount),
       assignments: formatCount(preview.stats.assignmentCount),
       favorites: formatCount(preview.stats.favoriteCount),
@@ -2136,6 +2342,7 @@ async function confirmOrganizationRestore(event) {
     selectedItemKeys.clear();
     ui.folderId = "all";
     ui.selectedFolderId = null;
+    ui.selectedCategoryId = null;
     resetResultWindow();
     refs["organization-restore-dialog"].close();
     render({ reconcileItems: true, animateItems: true });
@@ -2178,17 +2385,29 @@ async function confirmDataDelete(event) {
 }
 
 function populateParentSelect(mode) {
-  const selected = getSelectedFolder();
+  const selected = state.folders.find((folder) => folder.id === ui.folderDialogFolderId) ?? null;
   const select = refs["folder-parent-select"];
   select.replaceChildren();
 
-  const options = [{ id: "", label: t("최상위") }];
-  for (const folder of state.folders) {
-    const path = getFolderPath(state.folders, folder.id);
-    const allowed = mode === "move"
-      ? canMoveFolder(state.folders, selected.id, folder.id)
-      : folderDepth(state.folders, folder.id) < MAX_FOLDER_DEPTH;
-    if (allowed) options.push({ id: folder.id, label: path.map((entry) => entry.name).join(" / ") });
+  const options = [{ id: "root", label: t("카테고리 없음 (최상위)") }];
+  for (const category of [...state.categories].sort((left, right) => (
+    (left.order ?? 0) - (right.order ?? 0)
+      || left.name.localeCompare(right.name, ["ko", "ja", "en"], { numeric: true })
+  ))) {
+    options.push({
+      id: `category:${category.id}`,
+      label: t("카테고리 · {name}", { name: category.name }),
+    });
+  }
+
+  if (mode === "move") {
+    for (const folder of state.folders) {
+      if (!canMoveFolder(state.folders, selected.id, folder.id)) continue;
+      options.push({
+        id: `folder:${folder.id}`,
+        label: t("폴더 · {path}", { path: getFolderDisplayPath(folder.id).join(" / ") }),
+      });
+    }
   }
 
   for (const optionData of options) {
@@ -2199,27 +2418,63 @@ function populateParentSelect(mode) {
   }
 }
 
-function openFolderDialog(mode) {
-  const selected = getSelectedFolder();
+function parseFolderLocation(value) {
+  if (value.startsWith("category:")) {
+    return { parentId: null, categoryId: value.slice("category:".length) || null };
+  }
+  if (value.startsWith("folder:")) {
+    return { parentId: value.slice("folder:".length) || null, categoryId: null };
+  }
+  return { parentId: null, categoryId: null };
+}
+
+function openFolderDialog(mode, { folderId = null, categoryId = null } = {}) {
+  const selected = folderId
+    ? state.folders.find((folder) => folder.id === folderId) ?? null
+    : getSelectedFolder();
+  const selectedCategory = categoryId
+    ? state.categories.find((category) => category.id === categoryId) ?? null
+    : getSelectedCategory();
   ui.folderDialogMode = mode;
+  ui.folderDialogFolderId = selected?.id ?? null;
+  ui.folderDialogCategoryId = selectedCategory?.id ?? null;
   refs["folder-form-error"].textContent = "";
 
   const isMove = mode === "move";
-  const isRename = mode === "rename";
+  const isAddRoot = mode === "add-root";
+  const isCategory = mode === "add-category" || mode === "rename-category";
+  const isRename = mode === "rename" || mode === "rename-category";
   refs["folder-name-field"].hidden = isMove;
-  refs["folder-parent-field"].hidden = !isMove;
+  refs["folder-parent-field"].hidden = !(isMove || isAddRoot);
   refs["folder-name-input"].required = !isMove;
-  refs["folder-name-input"].value = isRename ? selected?.name || "" : "";
+  refs["folder-name-label"].textContent = t(isCategory ? "카테고리 이름" : "폴더 이름");
+  refs["folder-name-input"].value = isRename
+    ? (isCategory ? selectedCategory?.name : selected?.name) || ""
+    : "";
   refs["folder-dialog-title"].textContent = isMove
     ? t("폴더 이동")
-    : isRename
-      ? t("폴더 이름 변경")
-      : t("새 폴더");
+    : mode === "add-category"
+      ? t("새 카테고리")
+      : mode === "rename-category"
+        ? t("카테고리 이름 변경")
+        : isRename
+          ? t("폴더 이름 변경")
+          : t("새 폴더");
   refs["folder-submit"].textContent = t(isMove ? "이동" : "저장");
 
-  if (isMove) {
+  if (isMove || isAddRoot) {
+    refs["folder-parent-label"].textContent = t(isMove ? "이동할 위치" : "추가할 위치");
+    refs["folder-parent-hint"].textContent = t("카테고리는 폴더 3계층에 포함되지 않아요.");
     populateParentSelect(mode);
-    refs["folder-parent-select"].value = selected?.parentId || "";
+    refs["folder-parent-select"].value = isMove
+      ? selected?.parentId
+        ? `folder:${selected.parentId}`
+        : selected?.categoryId
+          ? `category:${selected.categoryId}`
+          : "root"
+      : selectedCategory?.id
+        ? `category:${selectedCategory.id}`
+        : "root";
   }
 
   refs["folder-dialog"].showModal();
@@ -2228,12 +2483,16 @@ function openFolderDialog(mode) {
 
 async function submitFolderForm(event) {
   event.preventDefault();
-  const selected = getSelectedFolder();
+  const selected = state.folders.find((folder) => folder.id === ui.folderDialogFolderId) ?? null;
   const mode = ui.folderDialogMode;
 
   try {
     if (mode === "add-root") {
-      state.folders = createFolder(state.folders, { name: refs["folder-name-input"].value });
+      const location = parseFolderLocation(refs["folder-parent-select"].value);
+      state.folders = createFolder(state.folders, {
+        name: refs["folder-name-input"].value,
+        categoryId: location.categoryId,
+      });
     } else if (mode === "add-child") {
       state.folders = createFolder(state.folders, {
         name: refs["folder-name-input"].value,
@@ -2242,15 +2501,30 @@ async function submitFolderForm(event) {
     } else if (mode === "rename") {
       state.folders = renameFolder(state.folders, selected.id, refs["folder-name-input"].value);
     } else if (mode === "move") {
-      state.folders = moveFolder(state.folders, selected.id, refs["folder-parent-select"].value || null);
+      const location = parseFolderLocation(refs["folder-parent-select"].value);
+      state.folders = moveFolder(state.folders, selected.id, location.parentId, location.categoryId);
+    } else if (mode === "add-category") {
+      state.categories = createCategory(state.categories, { name: refs["folder-name-input"].value });
+    } else if (mode === "rename-category") {
+      state.categories = renameCategory(
+        state.categories,
+        ui.folderDialogCategoryId,
+        refs["folder-name-input"].value,
+      );
     }
 
     await persistState();
     refs["folder-dialog"].close();
     render();
-    showToast(t(mode === "move" ? "폴더를 이동했어요." : "폴더를 저장했어요."));
+    showToast(t(
+      mode === "move"
+        ? "폴더를 이동했어요."
+        : mode.includes("category")
+          ? "카테고리를 저장했어요."
+          : "폴더를 저장했어요.",
+    ));
   } catch (error) {
-    refs["folder-form-error"].textContent = error.message;
+    refs["folder-form-error"].textContent = t(error.message);
   }
 }
 
@@ -2259,25 +2533,40 @@ function openAssignDialog(itemKey) {
   if (!item) return;
   ui.assigningItemKey = itemKey;
   refs["assign-item-name"].textContent = item.title;
-  refs["assign-folder-select"].replaceChildren(
-    element("option", { text: t("미분류"), attrs: { value: "" } }),
-  );
+  refs["assign-folder-list"].replaceChildren();
+  const assignedFolderIds = new Set(getItemFolderIds(state.assignments, itemKey));
 
   const orderedFolders = state.folders
-    .map((folder) => ({ folder, path: getFolderPath(state.folders, folder.id) }))
-    .sort((left, right) => left.path.map((entry) => entry.name).join("/").localeCompare(
-      right.path.map((entry) => entry.name).join("/"),
+    .map((folder) => ({ folder, path: getFolderDisplayPath(folder.id) }))
+    .sort((left, right) => left.path.join("/").localeCompare(
+      right.path.join("/"),
       ["ko", "ja", "en"],
       { numeric: true },
     ));
 
   for (const { folder, path } of orderedFolders) {
-    refs["assign-folder-select"].append(element("option", {
-      text: path.map((entry) => entry.name).join(" / "),
-      attrs: { value: folder.id },
+    const checkbox = element("input", {
+      attrs: {
+        type: "checkbox",
+        name: "assign-folder",
+        value: folder.id,
+      },
+    });
+    checkbox.checked = assignedFolderIds.has(folder.id);
+    const choice = element("label", { className: "folder-choice" });
+    choice.append(
+      checkbox,
+      element("span", { text: path.join(" / ") }),
+    );
+    refs["assign-folder-list"].append(choice);
+  }
+  if (!orderedFolders.length) {
+    refs["assign-folder-list"].append(element("p", {
+      className: "folder-choice-empty",
+      text: t("먼저 폴더를 만들어 주세요."),
     }));
   }
-  refs["assign-folder-select"].value = state.assignments[itemKey] || "";
+  refs["assign-submit"].disabled = !orderedFolders.length;
   refs["assign-dialog"].showModal();
 }
 
@@ -2293,7 +2582,12 @@ async function updateItemsFolderAssignment(
     ? folderPath.map((folder) => folder.name).join(" / ")
     : t("미분류");
   const changedCount = uniqueKeys.filter(
-    (itemKey) => (state.assignments[itemKey] || null) !== normalizedFolderId,
+    (itemKey) => {
+      const assignedFolderIds = getItemFolderIds(state.assignments, itemKey);
+      return normalizedFolderId
+        ? !assignedFolderIds.includes(normalizedFolderId)
+        : assignedFolderIds.length > 0;
+    },
   ).length;
 
   state.assignments = setItemsFolderAssignment(
@@ -2314,77 +2608,121 @@ async function updateItemsFolderAssignment(
   }
 
   showToast(normalizedFolderId
-    ? t("{count}개 상품을 {folder} 폴더로 옮겼어요.", {
+    ? t("{count}개 상품을 {folder} 폴더에도 추가했어요.", {
       count: formatCount(changedCount),
       folder: folderLabel,
     })
-    : t("{count}개 상품을 미분류로 옮겼어요.", { count: formatCount(changedCount) }));
+    : t("{count}개 상품의 폴더 배치를 모두 해제했어요.", { count: formatCount(changedCount) }));
   return true;
 }
 
-async function updateItemFolderAssignment(itemKey, folderId, { fromDrop = false } = {}) {
+async function updateItemFolderAssignments(itemKey, folderIds) {
   const item = findItem(itemKey);
   if (!item) throw new Error(t("상품을 찾을 수 없어요."));
 
-  const normalizedFolderId = folderId || null;
-  const previousFolderId = state.assignments[itemKey] || null;
-  const folderPath = normalizedFolderId ? getFolderPath(state.folders, normalizedFolderId) : [];
-  const folderLabel = normalizedFolderId
-    ? folderPath.map((folder) => folder.name).join(" / ")
-    : t("미분류");
-
-  if (previousFolderId === normalizedFolderId) {
-    if (fromDrop) markFolderDropSuccess(normalizedFolderId);
-    render();
-    showToast(t("이미 {folder}에 들어 있어요.", { folder: folderLabel }));
+  const nextFolderIds = [...new Set(Array.isArray(folderIds) ? folderIds : [])];
+  const previousFolderIds = getItemFolderIds(state.assignments, itemKey);
+  const unchanged = previousFolderIds.length === nextFolderIds.length
+    && previousFolderIds.every((folderId) => nextFolderIds.includes(folderId));
+  if (unchanged) {
+    showToast(t("폴더 배치가 바뀌지 않았어요."));
     return false;
   }
 
-  state.assignments = setItemFolderAssignment(
+  state.assignments = setItemFolderAssignments(
     state.items,
     state.folders,
     state.assignments,
     itemKey,
-    normalizedFolderId,
+    nextFolderIds,
   );
   await persistState();
-  if (fromDrop) markFolderDropSuccess(normalizedFolderId);
   render();
-  showToast(normalizedFolderId
-    ? t("{folder} 폴더로 옮겼어요.", { folder: folderLabel })
+  showToast(nextFolderIds.length
+    ? t("상품을 {count}개 폴더에 분류했어요.", { count: formatCount(nextFolderIds.length) })
     : t("상품을 미분류로 옮겼어요."));
   return true;
 }
 
 async function submitAssignment(event) {
   event.preventDefault();
-  const folderId = refs["assign-folder-select"].value;
+  const folderIds = Array.from(
+    refs["assign-folder-list"].querySelectorAll('input[name="assign-folder"]:checked'),
+    (input) => input.value,
+  );
   try {
-    await updateItemFolderAssignment(ui.assigningItemKey, folderId);
+    await updateItemFolderAssignments(ui.assigningItemKey, folderIds);
     refs["assign-dialog"].close();
   } catch (error) {
-    showToast(t("상품을 옮기지 못했어요: {message}", { message: error.message }), "error");
+    showToast(t("상품 폴더를 바꾸지 못했어요: {message}", { message: error.message }), "error");
   }
 }
 
-function openDeleteConfirmation() {
-  const selected = getSelectedFolder();
+function openDeleteConfirmation(folderId = ui.selectedFolderId) {
+  const selected = state.folders.find((folder) => folder.id === folderId) ?? null;
   if (!selected) return;
+  ui.confirmDeleteType = "folder";
+  ui.confirmDeleteFolderId = selected.id;
+  refs["confirm-dialog-eyebrow"].textContent = t("폴더 삭제");
+  refs["confirm-dialog-title"].textContent = t("이 폴더를 삭제할까요?");
+  refs["confirm-submit"].textContent = t("폴더 삭제");
   const childCount = state.folders.filter((folder) => folder.parentId === selected.id).length;
-  refs["confirm-copy"].textContent = childCount
-    ? t("“{name}” 폴더를 삭제합니다. 하위 폴더 {count}개와 이 폴더의 상품은 한 단계 위로 이동해요.", {
-      name: selected.name,
-      count: childCount,
-    })
-    : t("“{name}” 폴더를 삭제합니다. 이 폴더의 상품은 한 단계 위로 이동해요.", {
-      name: selected.name,
-    });
+  const hasParent = Boolean(selected.parentId);
+  const message = hasParent
+    ? (childCount
+      ? "“{name}” 폴더를 삭제합니다. 하위 폴더 {count}개와 이 폴더에 넣은 배치는 한 단계 위로 옮겨요. 다른 폴더 배치는 유지됩니다."
+      : "“{name}” 폴더를 삭제합니다. 이 폴더에 넣은 배치는 한 단계 위로 옮겨요. 다른 폴더 배치는 유지됩니다.")
+    : (childCount
+      ? "“{name}” 폴더를 삭제합니다. 하위 폴더 {count}개는 최상위로 옮기고, 이 폴더에 넣은 배치만 해제해요. 다른 폴더 배치는 유지됩니다."
+      : "“{name}” 폴더를 삭제합니다. 이 폴더에 넣은 배치만 해제해요. 다른 폴더 배치는 유지됩니다.");
+  refs["confirm-copy"].textContent = t(message, {
+    name: selected.name,
+    count: childCount,
+  });
+  refs["confirm-dialog"].showModal();
+}
+
+function openCategoryDeleteConfirmation(categoryId = ui.selectedCategoryId) {
+  const category = state.categories.find((candidate) => candidate.id === categoryId);
+  if (!category) return;
+  ui.selectedCategoryId = category.id;
+  ui.confirmDeleteType = "category";
+  const folderCount = countFolderNodes(
+    buildFolderTree(state.folders).filter((folder) => folder.categoryId === category.id),
+  );
+  refs["confirm-dialog-eyebrow"].textContent = t("카테고리 삭제");
+  refs["confirm-dialog-title"].textContent = t("이 카테고리를 삭제할까요?");
+  refs["confirm-submit"].textContent = t("카테고리 삭제");
+  refs["confirm-copy"].textContent = t(
+    folderCount
+      ? "“{name}” 카테고리를 삭제합니다. 안의 폴더 {count}개는 삭제하지 않고 카테고리 없음으로 옮겨요."
+      : "“{name}” 카테고리를 삭제합니다. 폴더와 상품에는 영향을 주지 않아요.",
+    { name: category.name, count: folderCount },
+  );
   refs["confirm-dialog"].showModal();
 }
 
 async function confirmDelete(event) {
   event.preventDefault();
-  const selected = getSelectedFolder();
+  if (ui.confirmDeleteType === "category") {
+    const selectedCategory = getSelectedCategory();
+    if (!selectedCategory) return;
+    const result = deleteCategoryAndReleaseFolders(
+      state.categories,
+      state.folders,
+      selectedCategory.id,
+    );
+    state.categories = result.categories;
+    state.folders = result.folders;
+    ui.selectedCategoryId = null;
+    await persistState();
+    refs["confirm-dialog"].close();
+    render();
+    showToast(t("카테고리를 삭제했어요."));
+    return;
+  }
+
+  const selected = state.folders.find((folder) => folder.id === ui.confirmDeleteFolderId) ?? null;
   if (!selected) return;
   const parentId = selected.parentId ?? "all";
   const result = deleteFolderAndPromote(state.folders, state.assignments, selected.id);
@@ -2392,10 +2730,17 @@ async function confirmDelete(event) {
   state.assignments = result.assignments;
   ui.folderId = parentId;
   ui.selectedFolderId = parentId === "all" ? null : parentId;
+  ui.selectedCategoryId = null;
   await persistState();
   refs["confirm-dialog"].close();
   render();
   showToast(t("폴더를 삭제했어요."));
+}
+
+async function toggleFolderCategory(categoryId) {
+  state.categories = toggleCategoryCollapsed(state.categories, categoryId);
+  await persistState();
+  renderFolders();
 }
 
 async function toggleFavorite(itemKey) {
@@ -2408,8 +2753,268 @@ async function toggleFavorite(itemKey) {
   render();
 }
 
+function closeContextMenu({ immediate = false, restoreFocus = false } = {}) {
+  const menu = refs["context-menu"];
+  if (!menu || menu.hidden) return false;
+  window.clearTimeout(contextMenuCloseTimer);
+  menu.classList.remove("is-open");
+  const finish = () => {
+    menu.hidden = true;
+    menu.replaceChildren();
+    if (restoreFocus && contextMenuReturnFocus?.isConnected) {
+      contextMenuReturnFocus.focus({ preventScroll: true });
+    }
+    contextMenuReturnFocus = null;
+  };
+  if (immediate || prefersReducedMotion()) finish();
+  else contextMenuCloseTimer = window.setTimeout(finish, 120);
+  return true;
+}
+
+function createContextMenuHeading(title, subtitle = "") {
+  const heading = element("div", { className: "context-menu-heading", attrs: { role: "presentation" } });
+  heading.append(element("strong", { text: title, attrs: { title } }));
+  if (subtitle) heading.append(element("span", { text: subtitle, attrs: { title: subtitle } }));
+  return heading;
+}
+
+function createContextMenuSeparator() {
+  return element("div", { className: "context-menu-separator", attrs: { role: "separator" } });
+}
+
+function createContextMenuAction({ label, icon = "", danger = false, disabled = false, action }) {
+  const button = element("button", {
+    className: `context-menu-action${danger ? " is-danger" : ""}`,
+    attrs: { type: "button", role: "menuitem", disabled: disabled ? "" : null },
+  });
+  if (icon) button.append(lucideIcon(icon, "context-menu-action-icon"));
+  button.append(element("span", { text: label }));
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (button.disabled) return;
+    closeContextMenu({ immediate: true });
+    try {
+      const result = action?.();
+      if (result && typeof result.catch === "function") {
+        result.catch((error) => {
+          showToast(t("작업을 완료하지 못했어요: {message}", { message: error.message }), "error");
+        });
+      }
+    } catch (error) {
+      showToast(t("작업을 완료하지 못했어요: {message}", { message: error.message }), "error");
+    }
+  });
+  return button;
+}
+
+function openContextMenu(event, children, label) {
+  const menu = refs["context-menu"];
+  closeContextMenu({ immediate: true });
+  contextMenuReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  menu.replaceChildren(...children);
+  menu.setAttribute("aria-label", label);
+  menu.hidden = false;
+  menu.classList.remove("is-open");
+
+  let left = event.clientX;
+  let top = event.clientY;
+  if (!left && !top && event.target instanceof Element) {
+    const anchorRect = event.target.getBoundingClientRect();
+    left = anchorRect.left + Math.min(28, anchorRect.width / 2);
+    top = anchorRect.top + Math.min(28, anchorRect.height / 2);
+  }
+  const margin = 8;
+  menu.style.left = `${Math.max(margin, left)}px`;
+  menu.style.top = `${Math.max(margin, top)}px`;
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin))}px`;
+  menu.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin))}px`;
+
+  window.requestAnimationFrame(() => {
+    if (menu.hidden) return;
+    menu.classList.add("is-open");
+    menu.querySelector('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+  });
+}
+
+function openExternalPage(url) {
+  if (!url) return;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function openCardContextMenu(event, itemKey) {
+  const item = findItem(itemKey);
+  const card = findRenderedCard(itemKey);
+  if (!item || !card) return;
+  const downloadState = getDownloadCardState(itemKey);
+  const isFavorite = state.favorites.includes(itemKey);
+  const assigned = getItemFolderIds(state.assignments, itemKey).length > 0;
+  const actions = [
+    createContextMenuHeading(item.title, item.sellerName),
+    createContextMenuAction({
+      label: t(downloadState.flipped ? "상품 카드로 돌아가기" : "다운로드 옵션 보기"),
+      icon: downloadState.flipped ? "arrow-left" : "download",
+      action: () => (downloadState.flipped
+        ? closeDownloadOptions(itemKey, card)
+        : revealDownloadOptions(itemKey, card)),
+    }),
+  ];
+  if (item.productUrl) {
+    actions.push(createContextMenuAction({
+      label: t("상품 상세 페이지 열기"),
+      icon: "external-link",
+      action: () => openExternalPage(item.productUrl),
+    }));
+  }
+  if (item.sellerUrl) {
+    actions.push(createContextMenuAction({
+      label: t("판매자 상점 열기"),
+      icon: "shopping-bag",
+      action: () => openExternalPage(item.sellerUrl),
+    }));
+  }
+  actions.push(
+    createContextMenuSeparator(),
+    createContextMenuAction({
+      label: t(assigned ? "폴더 관리" : "폴더에 넣기"),
+      icon: "folder-input",
+      action: () => openAssignDialog(itemKey),
+    }),
+    createContextMenuAction({
+      label: t(isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가"),
+      icon: "star",
+      action: () => toggleFavorite(itemKey),
+    }),
+  );
+  openContextMenu(event, actions, t("{title} 빠른 메뉴", { title: item.title }));
+}
+
+function openFolderContextMenu(event, folderId) {
+  const folder = state.folders.find((candidate) => candidate.id === folderId);
+  if (!folder) return;
+  openContextMenu(event, [
+    createContextMenuHeading(folder.name, getFolderDisplayPath(folder.id).slice(0, -1).join(" / ")),
+    createContextMenuAction({
+      label: t("하위 추가"),
+      icon: "folder-plus",
+      disabled: folderDepth(state.folders, folder.id) >= MAX_FOLDER_DEPTH,
+      action: () => openFolderDialog("add-child", { folderId }),
+    }),
+    createContextMenuAction({
+      label: t("이름 변경"),
+      icon: "pencil",
+      action: () => openFolderDialog("rename", { folderId }),
+    }),
+    createContextMenuAction({
+      label: t("이동"),
+      icon: "move",
+      action: () => openFolderDialog("move", { folderId }),
+    }),
+    createContextMenuSeparator(),
+    createContextMenuAction({
+      label: t("삭제"),
+      icon: "trash-2",
+      danger: true,
+      action: () => openDeleteConfirmation(folderId),
+    }),
+  ], t("{name} 폴더 빠른 메뉴", { name: folder.name }));
+}
+
+function openCategoryContextMenu(event, categoryId) {
+  const category = state.categories.find((candidate) => candidate.id === categoryId);
+  if (!category) return;
+  openContextMenu(event, [
+    createContextMenuHeading(category.name, t("카테고리")),
+    createContextMenuAction({
+      label: t("폴더 추가"),
+      icon: "folder-plus",
+      action: () => openFolderDialog("add-root", { categoryId }),
+    }),
+    createContextMenuAction({
+      label: t("이름 변경"),
+      icon: "pencil",
+      action: () => openFolderDialog("rename-category", { categoryId }),
+    }),
+    createContextMenuAction({
+      label: t(category.collapsed ? "펼치기" : "접기"),
+      icon: "chevron-right",
+      action: () => toggleFolderCategory(categoryId),
+    }),
+    createContextMenuSeparator(),
+    createContextMenuAction({
+      label: t("삭제"),
+      icon: "trash-2",
+      danger: true,
+      action: () => openCategoryDeleteConfirmation(categoryId),
+    }),
+  ], t("{name} 카테고리 빠른 메뉴", { name: category.name }));
+}
+
+function shouldKeepNativeContextMenu(target) {
+  return target instanceof Element && Boolean(target.closest(
+    'input, textarea, select, [contenteditable="true"]',
+  ));
+}
+
+function handleContextMenu(event) {
+  if (shouldKeepNativeContextMenu(event.target)) {
+    closeContextMenu({ immediate: true });
+    return;
+  }
+  event.preventDefault();
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+  if (target.closest("#context-menu")) return;
+
+  const card = target.closest(".item-card[data-item-key]");
+  if (card) {
+    openCardContextMenu(event, card.dataset.itemKey);
+    return;
+  }
+  const folder = target.closest("[data-folder-id]");
+  if (folder) {
+    openFolderContextMenu(event, folder.dataset.folderId);
+    return;
+  }
+  const category = target.closest("[data-category-id]");
+  if (category) {
+    openCategoryContextMenu(event, category.dataset.categoryId);
+    return;
+  }
+  closeContextMenu({ immediate: true });
+}
+
+function handleContextMenuKeydown(event) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const items = [...refs["context-menu"].querySelectorAll('[role="menuitem"]:not(:disabled)')];
+  if (!items.length) return;
+  event.preventDefault();
+  const currentIndex = items.indexOf(document.activeElement);
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? items.length - 1
+      : event.key === "ArrowDown"
+        ? (currentIndex + 1 + items.length) % items.length
+        : (currentIndex - 1 + items.length) % items.length;
+  items[nextIndex].focus({ preventScroll: true });
+}
+
 function bindEvents() {
+  document.addEventListener("contextmenu", handleContextMenu);
+  document.addEventListener("pointerdown", (event) => {
+    if (!(event.target instanceof Element) || !event.target.closest("#context-menu")) {
+      closeContextMenu();
+    }
+  });
+  window.addEventListener("scroll", () => closeContextMenu({ immediate: true }), true);
+  window.addEventListener("resize", () => closeContextMenu({ immediate: true }));
+  window.addEventListener("blur", () => closeContextMenu({ immediate: true }));
+  refs["context-menu"].addEventListener("keydown", handleContextMenuKeydown);
   refs["theme-toggle"].addEventListener("click", toggleTheme);
+  SYSTEM_THEME_MEDIA?.addEventListener("change", handleSystemThemeChange);
   refs["language-toggle"].addEventListener("click", () => {
     void cycleLocale();
   });
@@ -2427,6 +3032,7 @@ function bindEvents() {
     ui.source = "all";
     ui.folderId = "all";
     ui.selectedFolderId = null;
+    ui.selectedCategoryId = null;
     resetResultWindow();
     closeSidebar();
     render();
@@ -2435,6 +3041,13 @@ function bindEvents() {
   refs["all-folders"].addEventListener("click", () => selectFolder("all"));
   refs["unfiled-folder"].addEventListener("click", () => selectFolder("unfiled"));
   refs["folder-tree"].addEventListener("click", (event) => {
+    const categoryButton = event.target.closest("[data-category-id]");
+    if (categoryButton) {
+      void toggleFolderCategory(categoryButton.dataset.categoryId).catch((error) => {
+        showToast(t("카테고리를 변경하지 못했어요: {message}", { message: error.message }), "error");
+      });
+      return;
+    }
     const button = event.target.closest("[data-folder-id]");
     if (button) selectFolder(button.dataset.folderId);
   });
@@ -2445,10 +3058,11 @@ function bindEvents() {
   document.addEventListener("pointercancel", handleItemPointerCancel);
 
   refs["add-root-folder"].addEventListener("click", () => openFolderDialog("add-root"));
+  refs["add-category"].addEventListener("click", () => openFolderDialog("add-category"));
   refs["add-child-folder"].addEventListener("click", () => openFolderDialog("add-child"));
   refs["rename-folder"].addEventListener("click", () => openFolderDialog("rename"));
   refs["move-folder"].addEventListener("click", () => openFolderDialog("move"));
-  refs["delete-folder"].addEventListener("click", openDeleteConfirmation);
+  refs["delete-folder"].addEventListener("click", () => openDeleteConfirmation());
   refs["clear-local-data"].addEventListener("click", openDataDeleteConfirmation);
   refs["export-organization-data"].addEventListener("click", exportOrganizationData);
   refs["import-organization-data"].addEventListener("click", chooseOrganizationBackup);
@@ -2533,6 +3147,10 @@ function bindEvents() {
       refs["search-input"].focus();
     }
     if (event.key === "Escape") {
+      if (closeContextMenu({ restoreFocus: true })) {
+        event.preventDefault();
+        return;
+      }
       if (!clearItemSelection()) closeSidebar();
     }
   });
