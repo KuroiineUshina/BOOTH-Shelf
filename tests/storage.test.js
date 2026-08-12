@@ -90,7 +90,7 @@ test("저장 상태를 허용된 필드와 BOOTH URL로만 정규화한다", () 
     lastSyncedAt: "not-a-date",
   });
 
-  assert.equal(sanitized.schemaVersion, 5);
+  assert.equal(sanitized.schemaVersion, 6);
   assert.equal("injected" in sanitized, false);
   assert.equal(sanitized.items.length, 1);
   assert.equal(sanitized.items[0].title, "안전한 상품");
@@ -198,7 +198,14 @@ test("정리 데이터 백업은 상품 목록 없이 카테고리·폴더·배�
       createdAt: "2026-07-27T00:00:00.000Z",
     }],
     folders: [
-      { id: "avatar", name: "아바타", parentId: null, categoryId: "assets", order: 0 },
+      {
+        id: "avatar",
+        name: "아바타",
+        description: "자주 쓰는 아바타 에셋",
+        parentId: null,
+        categoryId: "assets",
+        order: 0,
+      },
       { id: "clothes", name: "의상", parentId: "avatar", order: 0 },
     ],
     favorites: ["purchased:101"],
@@ -207,7 +214,7 @@ test("정리 데이터 백업은 상품 목록 없이 카테고리·폴더·배�
   }, new Date("2026-07-27T01:02:03.000Z"));
 
   assert.equal(backup.format, "booth-shelf-organization");
-  assert.equal(backup.version, 3);
+  assert.equal(backup.version, 4);
   assert.equal(backup.exportedAt, "2026-07-27T01:02:03.000Z");
   assert.equal("items" in backup.data, false);
   assert.equal("lastSyncedAt" in backup.data, false);
@@ -218,6 +225,7 @@ test("정리 데이터 백업은 상품 목록 없이 카테고리·폴더·배�
     collapsed: true,
     createdAt: "2026-07-27T00:00:00.000Z",
   }]);
+  assert.equal(backup.data.folders[0].description, "자주 쓰는 아바타 에셋");
   assert.deepEqual(backup.data.favorites, ["product:101"]);
   assert.deepEqual(backup.data.assignments, { "product:101": ["avatar", "clothes"] });
 });
@@ -349,18 +357,32 @@ test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", as
   assert.equal(await loadSpendingSummary(), null);
 });
 
-test("테마와 결제 합계 캐시는 허용된 값만 저장한다", () => {
+test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", () => {
   assert.deepEqual(
     sanitizePreferences({ theme: "dark", locale: "ja", injected: true }),
-    { theme: "dark", locale: "ja" },
+    { theme: "dark", locale: "ja", sidebarWidth: 272, gridColumns: 4 },
   );
   assert.deepEqual(
-    sanitizePreferences({ theme: "system", locale: "invalid" }),
-    { theme: "system", locale: "auto" },
+    sanitizePreferences({
+      theme: "system",
+      locale: "invalid",
+      sidebarWidth: 999,
+      gridColumns: 6,
+    }),
+    { theme: "system", locale: "auto", sidebarWidth: 420, gridColumns: 6 },
   );
   assert.deepEqual(
-    sanitizePreferences({ theme: "unknown", locale: "ko" }),
-    { theme: "light", locale: "ko" },
+    sanitizePreferences({
+      theme: "unknown",
+      locale: "ko",
+      sidebarWidth: 100,
+      gridColumns: 5,
+    }),
+    { theme: "light", locale: "ko", sidebarWidth: 220, gridColumns: 5 },
+  );
+  assert.deepEqual(
+    sanitizePreferences({ sidebarWidth: "320", gridColumns: 7 }),
+    { theme: "light", locale: "auto", sidebarWidth: 272, gridColumns: 4 },
   );
 
   const summary = sanitizeSpendingSummary({

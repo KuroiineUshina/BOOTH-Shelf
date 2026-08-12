@@ -65,8 +65,6 @@
             </div>
           </div>
 
-          <p class="folder-drop-hint" id="folder-drop-hint" aria-live="polite">카드를 폴더에 끌어 놓아 분류</p>
-
           <button class="folder-row folder-system-row is-active" id="all-folders" type="button">
             <span class="folder-glyph licon licon-folders" aria-hidden="true"></span>
             <span class="folder-name">모든 폴더</span>
@@ -79,52 +77,24 @@
 
           <div class="folder-tree" id="folder-tree" role="tree" aria-label="사용자 폴더"></div>
 
-          <div class="folder-actions" id="folder-actions" hidden>
-            <button type="button" id="add-child-folder">하위 추가</button>
-            <button type="button" id="rename-folder">이름 변경</button>
-            <button type="button" id="move-folder">이동</button>
-            <button type="button" id="delete-folder" class="danger-text">삭제</button>
-          </div>
         </section>
 
         <div class="sidebar-spacer"></div>
-        <a
-          class="support-link"
-          href="https://ko-fi.com/kuroiineushina"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Ko-fi에서 개발자 후원하기 (새 탭)"
-        >
-          <img class="support-kofi-icon" src="assets/kofi/kofi-cup.png" alt="" aria-hidden="true">
-          <span class="support-copy">
-            <strong>개발자 후원하기</strong>
-            <small>Ko-fi에서 응원 보내기</small>
-          </span>
-          <span class="support-arrow licon licon-external-link" aria-hidden="true"></span>
-        </a>
-        <div class="privacy-note">
-          <span class="privacy-dot" aria-hidden="true"></span>
-          <div>
-            <strong>이 기기에만 저장</strong>
-            <p>상품 정보, 정리 상태, 테마·언어와 결제 합계 캐시는 외부 서버로 전송되지 않으며 언제든 삭제할 수 있습니다.</p>
-            <div class="organization-backup-actions" id="organization-backup-actions">
-              <button class="organization-backup-button" id="export-organization-data" type="button" aria-label="정리 데이터 백업">
-                <span class="licon licon-download" aria-hidden="true"></span>
-                백업
-              </button>
-              <button class="organization-backup-button" id="import-organization-data" type="button" aria-label="정리 데이터 복원">
-                <span class="licon licon-folder-input" aria-hidden="true"></span>
-                복원
-              </button>
-              <input id="organization-backup-file" type="file" accept=".json,application/json" hidden>
-            </div>
-            <button class="privacy-clear-button" id="clear-local-data" type="button">저장 데이터 모두 삭제</button>
-          </div>
-        </div>
-        <p class="service-version" id="service-version" aria-label="버전 1.0.6">
+        <p class="service-version" id="service-version" aria-label="버전 1.0.7">
           <span>버전</span>
-          <strong>1.0.6</strong>
+          <strong>1.0.7</strong>
         </p>
+        <div
+          class="sidebar-resizer"
+          id="sidebar-resizer"
+          role="separator"
+          aria-label="사이드바 너비 조절"
+          aria-orientation="vertical"
+          aria-valuemin="220"
+          aria-valuemax="420"
+          aria-valuenow="272"
+          tabindex="0"
+        ></div>
       </aside>
 
       <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="메뉴 닫기"></button>
@@ -163,11 +133,24 @@
               <span class="red-pill-button-icon licon licon-pill" aria-hidden="true"></span>
               <span class="button-label">빨간약</span>
             </button>
+            <a
+              class="header-icon-button kofi-header-button"
+              href="https://ko-fi.com/kuroiineushina"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Ko-fi에서 개발자 후원하기 (새 탭)"
+              title="개발자 후원하기"
+            >
+              <img src="assets/kofi/kofi-cup.png" alt="" aria-hidden="true">
+            </a>
             <button class="language-toggle" id="language-toggle" type="button" aria-label="언어 변경" title="언어 변경">
               <span class="licon licon-languages" aria-hidden="true"></span>
             </button>
             <button class="theme-toggle" id="theme-toggle" type="button" aria-label="테마 변경: 현재 라이트 모드, 다음 다크 모드" title="테마 변경: 현재 라이트 모드, 다음 다크 모드">
               <span class="licon licon-sun" id="theme-toggle-icon" aria-hidden="true"></span>
+            </button>
+            <button class="header-icon-button settings-button" id="settings-button" type="button" aria-label="설정 열기" title="설정" aria-haspopup="dialog" aria-controls="settings-dialog">
+              <span class="licon licon-settings" aria-hidden="true"></span>
             </button>
             <button class="sync-button" id="sync-button" type="button">
               <span class="sync-symbol licon licon-refresh-cw" aria-hidden="true"></span>
@@ -185,6 +168,19 @@
 
           <div class="hero-meta">
             <div class="sync-meta" id="last-sync">아직 동기화하지 않았어요</div>
+            <label class="grid-density-control" title="카드 배열 조절">
+              <span class="grid-density-icon licon licon-grid-3x3" aria-hidden="true"></span>
+              <input
+                id="grid-density"
+                type="range"
+                min="4"
+                max="6"
+                step="1"
+                value="4"
+                aria-label="카드 배열 조절"
+                aria-valuetext="큰 카드"
+              >
+            </label>
             <div class="sort-controls" role="group" aria-label="상품 정렬">
               <button
                 class="sort-switch"
@@ -279,6 +275,12 @@
           <input id="folder-name-input" type="text" maxlength="40" autocomplete="off" required>
         </label>
 
+        <label class="form-field" id="folder-description-field">
+          <span>폴더 설명</span>
+          <textarea id="folder-description-input" maxlength="160" rows="3" placeholder="이 폴더에 표시할 설명을 입력하세요."></textarea>
+          <small>비워두면 기본 설명이 표시됩니다.</small>
+        </label>
+
         <label class="form-field" id="folder-parent-field">
           <span id="folder-parent-label">이동할 위치</span>
           <select id="folder-parent-select"></select>
@@ -291,6 +293,45 @@
           <button class="primary-button" id="folder-submit" type="submit">저장</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog class="modal compact-modal settings-dialog" id="settings-dialog">
+      <div class="settings-dialog-content">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">설정</p>
+            <h2>데이터 관리</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="settings-dialog" aria-label="닫기">
+            <span class="licon licon-x" aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <section class="settings-data-section" aria-labelledby="settings-data-title">
+          <div class="settings-data-heading">
+            <span class="settings-data-icon licon licon-database" aria-hidden="true"></span>
+            <div>
+              <strong id="settings-data-title">이 기기에만 저장</strong>
+              <p>상품 정보와 정리 상태는 외부 서버로 전송되지 않습니다.</p>
+            </div>
+          </div>
+          <div class="settings-data-actions" id="organization-backup-actions">
+            <button class="settings-data-button" id="export-organization-data" type="button" aria-label="정리 데이터 백업">
+              <span class="licon licon-download" aria-hidden="true"></span>
+              <span>백업</span>
+            </button>
+            <button class="settings-data-button" id="import-organization-data" type="button" aria-label="정리 데이터 복원">
+              <span class="licon licon-folder-input" aria-hidden="true"></span>
+              <span>복원</span>
+            </button>
+            <input id="organization-backup-file" type="file" accept=".json,application/json" hidden>
+          </div>
+          <button class="settings-danger-button" id="clear-local-data" type="button">
+            <span class="licon licon-trash-2" aria-hidden="true"></span>
+            <span>저장 데이터 모두 삭제</span>
+          </button>
+        </section>
+      </div>
     </dialog>
 
     <dialog class="modal compact-modal" id="assign-dialog">

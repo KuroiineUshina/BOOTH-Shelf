@@ -124,6 +124,24 @@ test("같은 위치의 폴더 이름 중복을 막는다", () => {
   assert.throws(() => renameFolder(folders, "tools", "아바타"), /동일한 이름/);
 });
 
+test("폴더 설명을 만들고 변경하거나 비울 수 있다", () => {
+  const created = createFolder([], {
+    id: "favorites",
+    name: " 즐겨 쓰는 것 ",
+    description: "  자주 쓰는\n에셋을 모았어요.  ",
+    createdAt: "2026-08-12T00:00:00.000Z",
+  });
+  assert.equal(created[0].description, "자주 쓰는 에셋을 모았어요.");
+
+  const renamed = renameFolder(created, "favorites", "즐겨 쓰는 것", "이번 주에 쓸 에셋");
+  assert.equal(renamed[0].description, "이번 주에 쓸 에셋");
+  assert.equal(renameFolder(renamed, "favorites", "즐겨 쓰는 것", "")[0].description, "");
+  assert.throws(
+    () => renameFolder(renamed, "favorites", "즐겨 쓰는 것", "가".repeat(161)),
+    /160자 이하/,
+  );
+});
+
 test("폴더를 자신의 하위 또는 깊이 제한을 넘는 위치로 옮길 수 없다", () => {
   assert.equal(canMoveFolder(folders, "root", "grandchild"), false);
   assert.equal(canMoveFolder(folders, "child", "tools"), true);

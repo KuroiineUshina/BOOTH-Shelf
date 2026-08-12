@@ -29,6 +29,10 @@ import {
   syncBoothLibrary,
 } from "./booth.js";
 import {
+  DEFAULT_GRID_COLUMNS,
+  DEFAULT_SIDEBAR_WIDTH,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
   PREFERENCES_KEY,
   SPENDING_SUMMARY_KEY,
   STORAGE_KEY,
@@ -110,6 +114,12 @@ const ui = {
 };
 const selectedItemKeys = new Set();
 const sortSwitchAnimationTimers = new WeakMap();
+const sidebarResize = {
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startWidth: DEFAULT_SIDEBAR_WIDTH,
+};
 
 let state;
 let preferences;
@@ -142,13 +152,12 @@ const itemDrag = {
 };
 const refs = Object.fromEntries(
   [
-    "sidebar", "sidebar-close", "sidebar-open", "sidebar-backdrop",
+    "sidebar", "sidebar-close", "sidebar-open", "sidebar-backdrop", "sidebar-resizer",
     "all-count", "purchased-count", "gift-count", "free-count", "favorites-count",
     "favorites-nav", "add-root-folder", "add-category", "all-folders", "unfiled-folder",
-    "unfiled-count", "folder-drop-hint", "folder-tree", "folder-actions", "add-child-folder",
-    "rename-folder", "move-folder", "delete-folder", "search-input",
+    "unfiled-count", "folder-tree", "search-input",
     "search-field", "sync-button", "view-eyebrow", "view-title",
-    "view-description", "last-sync", "sort-kind-toggle", "sort-kind-icon",
+    "view-description", "last-sync", "grid-density", "sort-kind-toggle", "sort-kind-icon",
     "sort-kind-value", "sort-direction-toggle", "sort-direction-value", "sync-panel",
     "sync-message", "sync-detail", "sync-progress", "login-link",
     "result-summary", "selection-summary", "selection-count", "selection-clear",
@@ -156,12 +165,13 @@ const refs = Object.fromEntries(
     "empty-title", "empty-description", "empty-sync-button",
     "empty-login-link", "load-more-sentinel", "toast", "context-menu",
     "folder-dialog", "folder-form", "folder-dialog-title",
-    "folder-name-field", "folder-name-label", "folder-name-input", "folder-parent-field",
+    "folder-name-field", "folder-name-label", "folder-name-input",
+    "folder-description-field", "folder-description-input", "folder-parent-field",
     "folder-parent-label", "folder-parent-select", "folder-parent-hint", "folder-form-error", "folder-submit",
     "assign-dialog", "assign-form", "assign-item-name",
     "assign-folder-list", "assign-submit", "confirm-dialog", "confirm-form", "confirm-copy",
     "confirm-dialog-eyebrow", "confirm-dialog-title", "confirm-submit",
-    "clear-local-data", "organization-backup-actions",
+    "settings-button", "settings-dialog", "clear-local-data",
     "export-organization-data", "import-organization-data",
     "organization-backup-file", "organization-restore-dialog",
     "organization-restore-form", "organization-restore-summary",
@@ -249,7 +259,7 @@ function demoState() {
   }));
 
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     items,
     categories,
     folders,
@@ -309,6 +319,39 @@ function normalizeThemePreference(theme) {
   return THEME_SEQUENCE.includes(theme) ? theme : "light";
 }
 
+function normalizeSidebarWidth(value) {
+  const width = Number.isFinite(Number(value)) ? Math.round(Number(value)) : DEFAULT_SIDEBAR_WIDTH;
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
+}
+
+function applySidebarWidth(value) {
+  const width = normalizeSidebarWidth(value);
+  document.documentElement.style.setProperty("--sidebar-width", `${width}px`);
+  refs["sidebar-resizer"].setAttribute("aria-valuenow", String(width));
+  return width;
+}
+
+function normalizeGridColumns(value) {
+  const columns = Number(value);
+  return [4, 5, 6].includes(columns) ? columns : DEFAULT_GRID_COLUMNS;
+}
+
+function applyGridColumns(value) {
+  const columns = normalizeGridColumns(value);
+  const labels = { 4: "큰 카드", 5: "보통 카드", 6: "작은 카드" };
+  document.documentElement.style.setProperty("--grid-columns", String(columns));
+  document.documentElement.dataset.gridColumns = String(columns);
+  refs["grid-density"].value = String(columns);
+  refs["grid-density"].style.setProperty("--grid-density-progress", `${(columns - 4) * 50}%`);
+  refs["grid-density"].setAttribute("aria-valuetext", t(labels[columns]));
+  return columns;
+}
+
+function applyLayoutPreferences() {
+  applySidebarWidth(preferences?.sidebarWidth);
+  applyGridColumns(preferences?.gridColumns);
+}
+
 function applyTheme(theme) {
   const preference = normalizeThemePreference(theme);
   const resolvedTheme = preference === "system"
@@ -346,6 +389,7 @@ function applyLocalePreference(localePreference) {
   applyDocumentTranslations();
   updateLanguageToggle(locale);
   applyTheme(preferences?.theme);
+  applyGridColumns(preferences?.gridColumns);
 }
 
 function updateLanguageToggle(locale = getLocale()) {
@@ -632,6 +676,71 @@ function openSidebar() {
   document.body.classList.add("sidebar-visible");
 }
 
+function openSettingsDialog() {
+  refs["settings-dialog"].showModal();
+}
+
+async function saveSidebarWidth(width) {
+  preferences = { ...preferences, sidebarWidth: normalizeSidebarWidth(width) };
+  try {
+    preferences = await savePreferences(preferences);
+  } catch (error) {
+    showToast(t("사이드바 너비를 저장하지 못했어요: {message}", { message: error.message }), "error");
+  }
+}
+
+function beginSidebarResize(event) {
+  if (event.button !== 0 || window.matchMedia("(max-width: 980px)").matches) return;
+  event.preventDefault();
+  sidebarResize.active = true;
+  sidebarResize.pointerId = event.pointerId;
+  sidebarResize.startX = event.clientX;
+  sidebarResize.startWidth = refs.sidebar.getBoundingClientRect().width;
+  refs["sidebar-resizer"].setPointerCapture?.(event.pointerId);
+  document.body.classList.add("is-resizing-sidebar");
+}
+
+function updateSidebarResize(event) {
+  if (!sidebarResize.active || event.pointerId !== sidebarResize.pointerId) return;
+  event.preventDefault();
+  applySidebarWidth(sidebarResize.startWidth + event.clientX - sidebarResize.startX);
+}
+
+function finishSidebarResize(event) {
+  if (!sidebarResize.active || event.pointerId !== sidebarResize.pointerId) return;
+  const width = Number.parseInt(refs["sidebar-resizer"].getAttribute("aria-valuenow"), 10);
+  if (refs["sidebar-resizer"].hasPointerCapture?.(event.pointerId)) {
+    refs["sidebar-resizer"].releasePointerCapture(event.pointerId);
+  }
+  sidebarResize.active = false;
+  sidebarResize.pointerId = null;
+  document.body.classList.remove("is-resizing-sidebar");
+  void saveSidebarWidth(width);
+}
+
+function handleSidebarResizeKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const current = Number.parseInt(refs["sidebar-resizer"].getAttribute("aria-valuenow"), 10);
+  const width = event.key === "Home"
+    ? MIN_SIDEBAR_WIDTH
+    : event.key === "End"
+      ? MAX_SIDEBAR_WIDTH
+      : current + (event.key === "ArrowRight" ? 8 : -8);
+  const nextWidth = applySidebarWidth(width);
+  void saveSidebarWidth(nextWidth);
+}
+
+async function saveGridColumns(value) {
+  const gridColumns = applyGridColumns(value);
+  preferences = { ...preferences, gridColumns };
+  try {
+    preferences = await savePreferences(preferences);
+  } catch (error) {
+    showToast(t("카드 배열을 저장하지 못했어요: {message}", { message: error.message }), "error");
+  }
+}
+
 function resetResultWindow() {
   ui.visibleLimit = PAGE_SIZE;
 }
@@ -670,7 +779,7 @@ function getViewCopy() {
     return {
       eyebrow: [category?.name, ...path.slice(0, -1).map((entry) => entry.name)].filter(Boolean).join(" / ") || t("내 폴더"),
       title: folder?.name || t("폴더"),
-      description: t("이 폴더에 분류한 상품을 보여드려요."),
+      description: folder?.description || t("이 폴더에 분류한 상품을 보여드려요."),
     };
   }
 
@@ -848,16 +957,6 @@ function renderFolders() {
   }
   fragment.append(renderFolderBranch(uncategorizedRoots));
   refs["folder-tree"].replaceChildren(fragment);
-  if (!document.body.classList.contains("is-item-dragging")) {
-    refs["folder-drop-hint"].textContent = t("카드를 폴더에 끌어 놓아 분류");
-  }
-  const selected = getSelectedFolder();
-  refs["folder-actions"].hidden = !selected;
-  if (selected) {
-    const depth = folderDepth(state.folders, selected.id);
-    refs["add-child-folder"].disabled = depth >= MAX_FOLDER_DEPTH;
-    refs["add-child-folder"].title = depth >= MAX_FOLDER_DEPTH ? t("폴더는 3계층까지 만들 수 있어요.") : "";
-  }
 }
 
 function getDownloadCardState(itemKey) {
@@ -1428,7 +1527,6 @@ function finishItemDrag({ dropped = false } = {}) {
   }
   setFolderDropTarget(null);
   document.body.classList.remove("is-item-dragging");
-  refs["folder-drop-hint"].textContent = t("카드를 폴더에 끌어 놓아 분류");
   itemDrag.itemKeys = [];
   itemDrag.originItemKey = null;
   itemDrag.openedSidebar = false;
@@ -1463,9 +1561,6 @@ function beginPointerItemDrag(event) {
 
   gatherCardsForDrag(itemKeys, card);
   document.body.classList.add("is-item-dragging");
-  refs["folder-drop-hint"].textContent = itemKeys.length > 1
-    ? t("{count}개 상품을 놓을 폴더를 선택하세요", { count: formatCount(itemKeys.length) })
-    : t("놓을 폴더를 선택하세요");
 
   if (window.matchMedia("(max-width: 980px)").matches
     && !document.body.classList.contains("sidebar-visible")) {
@@ -1971,6 +2066,49 @@ function render({ reconcileItems = false, animateItems = false } = {}) {
   renderItems({ reconcile: reconcileItems, animateLayout: animateItems });
 }
 
+function captureViewportPosition() {
+  const anchors = Array.from(
+    refs["item-grid"].querySelectorAll(".item-card[data-item-key]:not([hidden])"),
+  )
+    .map((card) => ({
+      itemKey: card.dataset.itemKey,
+      rect: card.getBoundingClientRect(),
+    }))
+    .filter(({ rect }) => rect.bottom > 0)
+    .slice(0, 8)
+    .map(({ itemKey, rect }) => ({ itemKey, top: rect.top }));
+
+  return {
+    x: window.scrollX,
+    y: window.scrollY,
+    anchors,
+  };
+}
+
+function restoreViewportPosition(snapshot) {
+  if (!snapshot) return;
+  const anchor = snapshot.anchors.find(({ itemKey }) => {
+    const card = findRenderedCard(itemKey);
+    return card && !card.hidden;
+  });
+
+  if (anchor) {
+    const card = findRenderedCard(anchor.itemKey);
+    const deltaY = card.getBoundingClientRect().top - anchor.top;
+    window.scrollTo(snapshot.x, window.scrollY + deltaY);
+    return;
+  }
+
+  window.scrollTo(snapshot.x, snapshot.y);
+}
+
+function renderPreservingViewport(options) {
+  const snapshot = captureViewportPosition();
+  render(options);
+  restoreViewportPosition(snapshot);
+  window.requestAnimationFrame?.(() => restoreViewportPosition(snapshot));
+}
+
 function scheduleResultRender() {
   window.clearTimeout(renderTimer);
   renderTimer = window.setTimeout(() => {
@@ -2238,6 +2376,7 @@ function openDataDeleteConfirmation() {
     showToast(t("진행 중인 작업이 끝난 뒤 데이터를 삭제해 주세요."), "error");
     return;
   }
+  if (refs["settings-dialog"].open) refs["settings-dialog"].close();
   refs["data-delete-dialog"].showModal();
 }
 
@@ -2311,6 +2450,7 @@ async function prepareOrganizationRestore(event) {
       })}`
       : "";
     refs["organization-restore-summary"].textContent = `${summary}${skipped}`;
+    if (refs["settings-dialog"].open) refs["settings-dialog"].close();
     refs["organization-restore-dialog"].showModal();
   } catch (error) {
     pendingOrganizationBackup = null;
@@ -2370,6 +2510,7 @@ async function confirmDataDelete(event) {
     preferences = await loadPreferences();
     spendingSummary = await loadSpendingSummary();
     applyLocalePreference(preferences.locale);
+    applyLayoutPreferences();
     downloadCardStates.clear();
     refs["data-delete-dialog"].close();
     setSyncPanel({ hidden: true });
@@ -2445,11 +2586,15 @@ function openFolderDialog(mode, { folderId = null, categoryId = null } = {}) {
   const isCategory = mode === "add-category" || mode === "rename-category";
   const isRename = mode === "rename" || mode === "rename-category";
   refs["folder-name-field"].hidden = isMove;
+  refs["folder-description-field"].hidden = isMove || isCategory;
   refs["folder-parent-field"].hidden = !(isMove || isAddRoot);
   refs["folder-name-input"].required = !isMove;
   refs["folder-name-label"].textContent = t(isCategory ? "카테고리 이름" : "폴더 이름");
   refs["folder-name-input"].value = isRename
     ? (isCategory ? selectedCategory?.name : selected?.name) || ""
+    : "";
+  refs["folder-description-input"].value = isRename && !isCategory
+    ? selected?.description || ""
     : "";
   refs["folder-dialog-title"].textContent = isMove
     ? t("폴더 이동")
@@ -2491,15 +2636,22 @@ async function submitFolderForm(event) {
       const location = parseFolderLocation(refs["folder-parent-select"].value);
       state.folders = createFolder(state.folders, {
         name: refs["folder-name-input"].value,
+        description: refs["folder-description-input"].value,
         categoryId: location.categoryId,
       });
     } else if (mode === "add-child") {
       state.folders = createFolder(state.folders, {
         name: refs["folder-name-input"].value,
+        description: refs["folder-description-input"].value,
         parentId: selected.id,
       });
     } else if (mode === "rename") {
-      state.folders = renameFolder(state.folders, selected.id, refs["folder-name-input"].value);
+      state.folders = renameFolder(
+        state.folders,
+        selected.id,
+        refs["folder-name-input"].value,
+        refs["folder-description-input"].value,
+      );
     } else if (mode === "move") {
       const location = parseFolderLocation(refs["folder-parent-select"].value);
       state.folders = moveFolder(state.folders, selected.id, location.parentId, location.categoryId);
@@ -2600,7 +2752,7 @@ async function updateItemsFolderAssignment(
   await persistState();
   if (fromDrop) markFolderDropSuccess(normalizedFolderId);
   if (clearSelection) selectedItemKeys.clear();
-  render();
+  renderPreservingViewport();
 
   if (!changedCount) {
     showToast(t("선택한 상품이 이미 {folder}에 들어 있어요.", { folder: folderLabel }));
@@ -2637,7 +2789,7 @@ async function updateItemFolderAssignments(itemKey, folderIds) {
     nextFolderIds,
   );
   await persistState();
-  render();
+  renderPreservingViewport();
   showToast(nextFolderIds.length
     ? t("상품을 {count}개 폴더에 분류했어요.", { count: formatCount(nextFolderIds.length) })
     : t("상품을 미분류로 옮겼어요."));
@@ -3018,11 +3170,24 @@ function bindEvents() {
   refs["language-toggle"].addEventListener("click", () => {
     void cycleLocale();
   });
+  refs["settings-button"].addEventListener("click", openSettingsDialog);
   refs["red-pill-button"].addEventListener("click", openRedPillDialog);
   refs["red-pill-calculate"].addEventListener("click", calculateSpending);
   refs["sidebar-open"].addEventListener("click", openSidebar);
   refs["sidebar-close"].addEventListener("click", closeSidebar);
   refs["sidebar-backdrop"].addEventListener("click", closeSidebar);
+  refs["sidebar-resizer"].addEventListener("pointerdown", beginSidebarResize);
+  refs["sidebar-resizer"].addEventListener("keydown", handleSidebarResizeKeydown);
+  document.addEventListener("pointermove", updateSidebarResize, { passive: false });
+  document.addEventListener("pointerup", finishSidebarResize);
+  document.addEventListener("pointercancel", finishSidebarResize);
+
+  refs["grid-density"].addEventListener("input", (event) => {
+    applyGridColumns(event.target.value);
+  });
+  refs["grid-density"].addEventListener("change", (event) => {
+    void saveGridColumns(event.target.value);
+  });
 
   document.querySelectorAll("[data-source]").forEach((button) => {
     button.addEventListener("click", () => setSource(button.dataset.source));
@@ -3059,10 +3224,6 @@ function bindEvents() {
 
   refs["add-root-folder"].addEventListener("click", () => openFolderDialog("add-root"));
   refs["add-category"].addEventListener("click", () => openFolderDialog("add-category"));
-  refs["add-child-folder"].addEventListener("click", () => openFolderDialog("add-child"));
-  refs["rename-folder"].addEventListener("click", () => openFolderDialog("rename"));
-  refs["move-folder"].addEventListener("click", () => openFolderDialog("move"));
-  refs["delete-folder"].addEventListener("click", () => openDeleteConfirmation());
   refs["clear-local-data"].addEventListener("click", openDataDeleteConfirmation);
   refs["export-organization-data"].addEventListener("click", exportOrganizationData);
   refs["import-organization-data"].addEventListener("click", chooseOrganizationBackup);
@@ -3163,16 +3324,21 @@ function bindStorageChanges() {
     if (areaName !== "local") return;
     try {
       if (Object.hasOwn(changes, STORAGE_KEY)) {
+        const viewportPosition = captureViewportPosition();
         state = await loadState();
         downloadCardStates.clear();
         selectedItemKeys.clear();
         resetResultWindow();
         render();
+        restoreViewportPosition(viewportPosition);
+        window.requestAnimationFrame?.(() => restoreViewportPosition(viewportPosition));
       }
       if (Object.hasOwn(changes, PREFERENCES_KEY)) {
+        const previousLocale = preferences?.locale;
         preferences = await loadPreferences();
         applyLocalePreference(preferences.locale);
-        render();
+        applyLayoutPreferences();
+        if (preferences.locale !== previousLocale) renderPreservingViewport();
       }
       if (Object.hasOwn(changes, SPENDING_SUMMARY_KEY)) {
         spendingSummary = await loadSpendingSummary();
@@ -3193,8 +3359,6 @@ async function init() {
     state = demoState();
     preferences = await loadPreferences();
     spendingSummary = null;
-    refs["clear-local-data"].hidden = true;
-    refs["organization-backup-actions"].hidden = true;
   } else {
     await restrictStorageAccess();
     [state, preferences, spendingSummary] = await Promise.all([
@@ -3204,6 +3368,7 @@ async function init() {
     ]);
   }
   applyLocalePreference(preferences.locale);
+  applyLayoutPreferences();
   bindEvents();
   bindInfiniteScroll();
   bindStorageChanges();

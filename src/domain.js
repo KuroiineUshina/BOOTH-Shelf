@@ -467,8 +467,15 @@ export function canMoveFolder(folders, folderId, newParentId) {
     && parentDepth + height <= MAX_FOLDER_DEPTH;
 }
 
+function normalizeFolderDescription(value) {
+  const description = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (description.length > 160) throw new Error("폴더 설명은 160자 이하로 입력해 주세요.");
+  return description;
+}
+
 export function createFolder(folders, {
   name,
+  description = "",
   parentId = null,
   categoryId = null,
   id,
@@ -495,6 +502,7 @@ export function createFolder(folders, {
     {
       id: id ?? crypto.randomUUID(),
       name: trimmedName,
+      description: normalizeFolderDescription(description),
       parentId,
       categoryId: normalizedCategoryId,
       order: siblings.length,
@@ -503,7 +511,7 @@ export function createFolder(folders, {
   ];
 }
 
-export function renameFolder(folders, folderId, name) {
+export function renameFolder(folders, folderId, name, description) {
   const current = folders.find((folder) => folder.id === folderId);
   if (!current) throw new Error("폴더를 찾을 수 없어요.");
 
@@ -519,9 +527,12 @@ export function renameFolder(folders, folderId, name) {
       && normalizeText(folder.name) === normalizeText(trimmedName)
   ));
   if (hasDuplicate) throw new Error("같은 위치에 동일한 이름의 폴더가 있어요.");
+  const nextDescription = description === undefined
+    ? (current.description ?? "")
+    : normalizeFolderDescription(description);
 
   return folders.map((folder) => (
-    folder.id === folderId ? { ...folder, name: trimmedName } : folder
+    folder.id === folderId ? { ...folder, name: trimmedName, description: nextDescription } : folder
   ));
 }
 

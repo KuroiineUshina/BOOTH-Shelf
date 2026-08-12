@@ -9,7 +9,11 @@ export const STORAGE_KEY = "boothShelfState";
 export const PREFERENCES_KEY = "boothShelfPreferences";
 export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
 export const ORGANIZATION_BACKUP_FORMAT = "booth-shelf-organization";
-export const ORGANIZATION_BACKUP_VERSION = 3;
+export const ORGANIZATION_BACKUP_VERSION = 4;
+export const DEFAULT_SIDEBAR_WIDTH = 272;
+export const MIN_SIDEBAR_WIDTH = 220;
+export const MAX_SIDEBAR_WIDTH = 420;
+export const DEFAULT_GRID_COLUMNS = 4;
 
 const MAX_STORED_ITEMS = 50_000;
 const MAX_ITEM_LOCATIONS = 256;
@@ -24,7 +28,7 @@ const ITEM_SOURCES = Object.freeze(["purchased", "gift", "free"]);
 const AVATAR_PROFILE_ID_PATTERN = /^[a-z0-9]{1,64}$/;
 
 export const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 5,
+  schemaVersion: 6,
   items: [],
   categories: [],
   folders: [],
@@ -70,9 +74,16 @@ function cleanDate(value) {
 
 export function sanitizePreferences(value) {
   const preferences = isRecord(value) ? value : {};
+  const sidebarWidth = Number.isFinite(preferences.sidebarWidth)
+    ? Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(preferences.sidebarWidth)))
+    : DEFAULT_SIDEBAR_WIDTH;
   return {
     theme: ["light", "dark", "system"].includes(preferences.theme) ? preferences.theme : "light",
     locale: ["ko", "en", "ja"].includes(preferences.locale) ? preferences.locale : "auto",
+    sidebarWidth,
+    gridColumns: [4, 5, 6].includes(preferences.gridColumns)
+      ? preferences.gridColumns
+      : DEFAULT_GRID_COLUMNS,
   };
 }
 
@@ -336,6 +347,7 @@ function sanitizeFolders(value, categories = []) {
     folders.push({
       id: candidate.id,
       name,
+      description: cleanString(candidate.description, 160),
       parentId: isSafeId(candidate.parentId) ? candidate.parentId : null,
       categoryId: isSafeId(candidate.categoryId) ? candidate.categoryId : null,
       order: nonNegativeInteger(candidate.order),
@@ -437,7 +449,7 @@ export function createOrganizationBackup(value, exportedAt = new Date()) {
 }
 
 export function restoreOrganizationBackup(currentValue, backupValue) {
-  const supportedBackupVersions = [1, 2, ORGANIZATION_BACKUP_VERSION];
+  const supportedBackupVersions = [1, 2, 3, ORGANIZATION_BACKUP_VERSION];
   if (!isRecord(backupValue)
     || backupValue.format !== ORGANIZATION_BACKUP_FORMAT
     || !supportedBackupVersions.includes(backupValue.version)
