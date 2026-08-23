@@ -10,7 +10,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.0.7");
+  assert.equal(manifest.version, "1.0.8");
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.version_name, manifest.version);
   assert.deepEqual(manifest.permissions, ["storage"]);
@@ -72,7 +72,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(dashboard, /id="confirm-dialog-eyebrow"/);
   assert.match(dashboard, /id="confirm-dialog-title"/);
   assert.match(dashboard, /id="confirm-submit"/);
-  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.7"/);
+  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.8"/);
   assert.match(dashboard, /id="theme-toggle"/);
   assert.match(dashboard, /class="licon licon-sun" id="theme-toggle-icon"/);
   assert.doesNotMatch(dashboard, /id="theme-toggle"[^>]*aria-pressed/);
@@ -233,6 +233,11 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(app, /function captureViewportPosition\(\)/);
   assert.match(app, /function restoreViewportPosition\(snapshot\)/);
   assert.match(app, /function renderPreservingViewport\(options\)/);
+  assert.doesNotMatch(app, /createDescriptionSupportNotice|지원 확인|download-support-notice/);
+  assert.match(app, /visibleLimit:\s*ui\.visibleLimit/);
+  const storageChangeHandler = app.slice(app.indexOf("function bindStorageChanges"));
+  assert.match(storageChangeHandler, /ui\.visibleLimit = Math\.max\(viewportPosition\.visibleLimit \|\| PAGE_SIZE, PAGE_SIZE\)/);
+  assert.doesNotMatch(storageChangeHandler, /resetResultWindow\(\)/);
   assert.match(app, /function applySidebarWidth\(value\)/);
   assert.match(app, /function beginSidebarResize\(event\)/);
   assert.match(app, /function saveSidebarWidth\(width\)/);
@@ -241,7 +246,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(app, /function saveGridColumns\(value\)/);
   assert.match(app, /folder\?\.description \|\| t\("이 폴더에 분류한 상품을 보여드려요\."\)/);
   assert.match(app, /await persistState\(\);[\s\S]{0,220}renderPreservingViewport\(\);/);
-  assert.match(app, /const viewportPosition = captureViewportPosition\(\);[\s\S]{0,300}restoreViewportPosition\(viewportPosition\);/);
+  assert.match(app, /const viewportPosition = captureViewportPosition\(\);[\s\S]{0,500}restoreViewportPosition\(viewportPosition\);/);
   assert.match(app, /deleteCategoryAndReleaseFolders\(/);
   assert.match(app, /download: `booth-shelf-organization-\$\{date\}\.json`/);
   assert.match(styles, /\.licon-languages::before \{ content: "\\e0fe"; \}/);

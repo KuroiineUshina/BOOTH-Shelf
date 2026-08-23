@@ -10,7 +10,10 @@ import {
   getOrdersPageNumber,
   getPageNumber,
   groupBoothLibraryItems,
+  isBoothOrderPaymentLabel,
   isProductSupportIndexFresh,
+  isSettledBoothOrderState,
+  parseBoothOrderMoney,
   summarizeBoothOrderDetails,
 } from "../src/booth.js";
 
@@ -175,7 +178,27 @@ test("구매 내역 페이지 번호는 orders 목록에서만 읽는다", () =>
   assert.equal(getOrdersPageNumber("/orders?page=2&keyword=test"), null);
 });
 
-test("완료 주문 결제 금액은 주문 번호별로 한 번만 합산한다", () => {
+test("빨간약은 결제가 확인된 주문 상태만 합산 대상으로 인정한다", () => {
+  assert.equal(isSettledBoothOrderState(["badge", "order-state", "paid"]), true);
+  assert.equal(isSettledBoothOrderState(["badge", "order-state", "completed"]), true);
+  assert.equal(isSettledBoothOrderState(["badge", "shipped"]), true);
+  assert.equal(isSettledBoothOrderState(["badge", "order-state", "unpaid"]), false);
+  assert.equal(isSettledBoothOrderState(["badge", "completed", "refunded"]), false);
+});
+
+test("빨간약은 다국어 결제 금액 표기와 통화 위치를 정확히 읽는다", () => {
+  assert.equal(isBoothOrderPaymentLabel("결제 금액"), true);
+  assert.equal(isBoothOrderPaymentLabel("支払い金額："), true);
+  assert.equal(isBoothOrderPaymentLabel("お支払い金額（税込）"), true);
+  assert.equal(isBoothOrderPaymentLabel("Payment amount"), true);
+  assert.equal(isBoothOrderPaymentLabel("상품 합계"), false);
+  assert.deepEqual(parseBoothOrderMoney("1,280 JPY"), { amount: 1280, currency: "JPY" });
+  assert.deepEqual(parseBoothOrderMoney("¥ 2,400"), { amount: 2400, currency: "JPY" });
+  assert.deepEqual(parseBoothOrderMoney("USD 5.50"), { amount: 5.5, currency: "USD" });
+  assert.equal(parseBoothOrderMoney("9001"), null);
+});
+
+test("결제 확인 주문의 결제 금액은 주문 번호별로 한 번만 합산한다", () => {
   const summary = summarizeBoothOrderDetails([
     { orderId: "9001", completed: true, money: { amount: 800, currency: "JPY" } },
     { orderId: "9001", completed: true, money: { amount: 800, currency: "JPY" } },

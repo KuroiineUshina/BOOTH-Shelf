@@ -8,6 +8,7 @@ import {
   loadSpendingSummary,
   loadState,
   replaceMemoryState,
+  SPENDING_SUMMARY_VERSION,
   sanitizePreferences,
   sanitizeSpendingSummary,
   savePreferences,
@@ -349,6 +350,7 @@ test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", as
   assert.equal((await loadState()).items.length, 1);
   assert.equal((await loadPreferences()).theme, "dark");
   assert.equal((await loadSpendingSummary()).totals.JPY, 123456);
+  assert.equal((await loadSpendingSummary()).version, SPENDING_SUMMARY_VERSION);
 
   const cleared = await clearState();
   assert.deepEqual(cleared.items, []);
@@ -386,6 +388,7 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
   );
 
   const summary = sanitizeSpendingSummary({
+    version: SPENDING_SUMMARY_VERSION,
     totals: { JPY: 1200, USD: 3.5, bad: 999, EUR: -1 },
     orderCount: 2,
     freeOrderCount: 1,
@@ -393,5 +396,12 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
     orderIds: ["secret"],
   });
   assert.deepEqual(summary.totals, { JPY: 1200, USD: 3.5 });
+  assert.equal(summary.version, SPENDING_SUMMARY_VERSION);
   assert.equal("orderIds" in summary, false);
+  assert.equal(sanitizeSpendingSummary({
+    totals: { JPY: 1200 },
+    orderCount: 1,
+    freeOrderCount: 0,
+    scannedAt: "2026-07-19T00:00:00.000Z",
+  }), null);
 });

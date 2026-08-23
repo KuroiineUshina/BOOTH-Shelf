@@ -332,7 +332,9 @@ export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
 }
 
 const DOWNLOAD_CONTROL_SELECTOR = '.js-download-button[data-href], a[href*="/downloadables/"]';
-const ORDER_MONEY_PATTERN = /^([0-9][0-9,.]*)\s*(?:([A-Z]{3})|円)$/i;
+const ORDER_PAYMENT_LABEL_PATTERN = /^(?:(?:총\s*)?결제\s*금액|(?:お)?支払(?:い)?金額|決済金額|payment\s+(?:amount|total)|amount\s+paid|total\s+paid|支付金額|支付金额|付款金額|付款金额)(?:\s*[（(][^()（）]{1,40}[）)])?$/iu;
+const SETTLED_ORDER_STATE_CLASSES = Object.freeze(["paid", "completed", "dispatched", "shipped"]);
+const EXCLUDED_ORDER_STATE_CLASSES = Object.freeze(["unpaid", "cancelled", "refunded"]);
 
 function findDownloadCard(titleAnchor, productId, baseUrl) {
   let node = titleAnchor.parentElement;
@@ -659,16 +661,65 @@ export function parseBoothOrdersPage(html, { pageUrl = buildOrdersPageUrl(1) } =
   };
 }
 
-function parseOrderMoney(value) {
-  const match = normalizeText(value).match(ORDER_MONEY_PATTERN);
-  if (!match) return null;
+export function parseBoothOrderMoney(value) {
+  const normalized = normalizeText(value).normalize("NFKC");
+  const prefixed = normalized.match(/^([A-Z]{3}|¥)\s*([0-9][0-9,.]*)$/iu);
+  const suffixed = normalized.match(/^([0-9][0-9,.]*)\s*([A-Z]{3}|円|¥)$/iu);
+  const amountText = prefixed?.[2] || suffixed?.[1];
+  const currencyText = prefixed?.[1] || suffixed?.[2];
+  if (!amountText || !currencyText) return null;
 
-  const amount = Number(match[1].replace(/,/g, ""));
+  const amount = Number(amountText.replace(/,/g, ""));
   if (!Number.isFinite(amount) || amount < 0) return null;
   return {
     amount,
-    currency: (match[2] || "JPY").toUpperCase(),
+    currency: /^(?:円|¥)$/u.test(currencyText) ? "JPY" : currencyText.toUpperCase(),
   };
+}
+
+export function isSettledBoothOrderState(classNames) {
+  const classes = new Set(Array.from(classNames || [], (value) => String(value || "")));
+  if (EXCLUDED_ORDER_STATE_CLASSES.some((className) => classes.has(className))) return false;
+  return SETTLED_ORDER_STATE_CLASSES.some((className) => classes.has(className));
+}
+
+function getOrderSettlementState(documentNode) {
+  const explicitStateNodes = Array.from(documentNode.querySelectorAll(".order-state"));
+  const stateNodes = explicitStateNodes.length
+    ? explicitStateNodes
+    : Array.from(documentNode.querySelectorAll(
+      ".badge.paid, .badge.completed, .badge.dispatched, .badge.shipped, .badge.unpaid, .badge.cancelled, .badge.refunded",
+    ));
+  const allClasses = stateNodes.flatMap((node) => Array.from(node.classList));
+  if (!isSettledBoothOrderState(allClasses)) return { settled: false, node: null };
+  const node = stateNodes.find((candidate) => isSettledBoothOrderState(candidate.classList)) || null;
+  return { settled: Boolean(node), node };
+}
+
+export function isBoothOrderPaymentLabel(value) {
+  return ORDER_PAYMENT_LABEL_PATTERN.test(
+    normalizeText(value).replace(/[：:]$/u, "").trim(),
+  );
+}
+
+function findLabeledOrderMoney(root) {
+  const nodes = Array.from(root?.querySelectorAll(".l-row > *, dt, th") || []);
+  for (const labelNode of nodes) {
+    if (!isBoothOrderPaymentLabel(labelNode.textContent)) continue;
+    const candidates = [
+      labelNode.nextElementSibling,
+      labelNode.parentElement?.querySelector("dd"),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      const money = parseBoothOrderMoney(candidate.textContent);
+      if (money) return money;
+    }
+  }
+
+  const fallbackMoney = Array.from(root?.querySelectorAll(".l-row > *, dd, td") || [])
+    .map((node) => parseBoothOrderMoney(node.textContent))
+    .filter(Boolean);
+  return fallbackMoney.length === 1 ? fallbackMoney[0] : null;
 }
 
 export function parseBoothOrderDetail(html, { orderId, pageUrl } = {}) {
@@ -679,7 +730,7 @@ export function parseBoothOrderDetail(html, { orderId, pageUrl } = {}) {
   const documentNode = new DOMParser().parseFromString(html, "text/html");
   assertAuthenticated(documentNode);
 
-  const completedBadge = documentNode.querySelector(".order-state.completed");
+  const settlement = getOrderSettlementState(documentNode);
   const headingOrderId = normalizeText(documentNode.querySelector("main h1, h1")?.textContent)
     .match(/\b(\d{4,})\b/)?.[1];
   const resolvedOrderId = headingOrderId || getBoothOrderId(pageUrl) || String(orderId || "");
@@ -687,16 +738,12 @@ export function parseBoothOrderDetail(html, { orderId, pageUrl } = {}) {
     throw new Error(t("BOOTH 주문 번호를 확인하지 못했어요."));
   }
 
-  if (!completedBadge) {
+  if (!settlement.settled) {
     return { orderId: resolvedOrderId, completed: false, money: null };
   }
 
-  const summarySheet = completedBadge.closest(".sheet") || completedBadge.parentElement;
-  const summaryRows = Array.from(summarySheet?.querySelectorAll(".l-row") || []);
-  const money = summaryRows
-    .flatMap((row) => Array.from(row.children))
-    .map((node) => parseOrderMoney(node.textContent))
-    .find(Boolean) || null;
+  const summarySheet = settlement.node.closest(".sheet") || settlement.node.parentElement;
+  const money = findLabeledOrderMoney(summarySheet) || findLabeledOrderMoney(documentNode);
 
   return {
     orderId: resolvedOrderId,
@@ -710,7 +757,7 @@ export function summarizeBoothOrderDetails(details, scannedAt = new Date().toISO
   for (const detail of Array.isArray(details) ? details : []) {
     if (!detail?.completed) continue;
     if (!detail.money) {
-      throw new Error(t("일부 완료 주문의 결제 금액을 읽지 못했어요. 잠시 후 다시 시도해 주세요."));
+      throw new Error(t("일부 결제 확인 주문의 결제 금액을 읽지 못했어요. 잠시 후 다시 시도해 주세요."));
     }
     if (!/^\d+$/.test(String(detail.orderId || ""))) continue;
     if (!completedOrders.has(detail.orderId)) completedOrders.set(detail.orderId, detail.money);

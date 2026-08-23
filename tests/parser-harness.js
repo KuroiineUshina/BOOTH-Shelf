@@ -89,8 +89,32 @@ const orderDetailFixture = `
       <div class="l-row text-14">
         <div>Created At</div><div>2026/07/19 10:00:00</div>
         <div>Order Number</div><div>9001</div>
+        <div>상품 합계</div><div>540 JPY</div>
         <div>결제 금액</div><div>1,280 JPY</div>
       </div>
+    </div>
+  </main></body></html>
+`;
+
+const paidOrderDetailFixture = `
+  <html><head><title>Order Detail - BOOTH</title></head><body><main>
+    <h1>Order Detail - Order Number: 9002</h1>
+    <div class="sheet">
+      <span class="badge order-state paid">Paid</span>
+      <div class="l-row text-14">
+        <div class="l-col-pc-3">商品小計</div><div class="l-col-pc-9">900 JPY</div>
+        <div class="l-col-pc-3">支払い金額：</div><div class="l-col-pc-9">¥ 2,400</div>
+      </div>
+    </div>
+  </main></body></html>
+`;
+
+const unpaidOrderDetailFixture = `
+  <html><head><title>Order Detail - BOOTH</title></head><body><main>
+    <h1>Order Detail - Order Number: 9003</h1>
+    <div class="sheet">
+      <span class="badge order-state unpaid">Unpaid</span>
+      <div class="l-row"><div>결제 금액</div><div>3,000 JPY</div></div>
     </div>
   </main></body></html>
 `;
@@ -138,6 +162,14 @@ try {
     orderId: "9001",
     pageUrl: "https://accounts.booth.pm/orders/9001",
   });
+  const paidOrderDetail = parseBoothOrderDetail(paidOrderDetailFixture, {
+    orderId: "9002",
+    pageUrl: "https://accounts.booth.pm/orders/9002",
+  });
+  const unpaidOrderDetail = parseBoothOrderDetail(unpaidOrderDetailFixture, {
+    orderId: "9003",
+    pageUrl: "https://accounts.booth.pm/orders/9003",
+  });
   const productSupport = parseBoothProductSupport(productSupportFixture, {
     productId: "999001",
     pageUrl: "https://booth.pm/ja/items/999001",
@@ -178,6 +210,12 @@ try {
       && orderDetail.orderId === "9001"
       && orderDetail.money.amount === 1280
       && orderDetail.money.currency === "JPY"
+      && paidOrderDetail.completed
+      && paidOrderDetail.orderId === "9002"
+      && paidOrderDetail.money.amount === 2400
+      && paidOrderDetail.money.currency === "JPY"
+      && !unpaidOrderDetail.completed
+      && unpaidOrderDetail.money === null
       && productSupport.descriptionFound
       && productSupport.supportedAvatarIds.join(",") === "misaki,shinra"
       && productSupport.linkedProductIds.includes("9876543")
@@ -192,6 +230,8 @@ try {
     downloads,
     orders,
     orderDetail,
+    paidOrderDetail,
+    unpaidOrderDetail,
     productSupport,
     avatarProduct,
   });

@@ -2,6 +2,7 @@ import {
   buildAvatarProfileIds,
   buildLiteralSearchVariants,
   buildSearchVariants,
+  findAvatarProfileIdsInText,
   normalizeSearchText,
 } from "./search.js";
 
@@ -35,19 +36,25 @@ export function getItemFolderIds(assignments, itemKey) {
 
 function searchIndexForItem(item) {
   if (!item || typeof item !== "object") {
-    return { title: [], seller: [], downloads: [] };
+    return { title: [], seller: [], downloads: [], ownedAvatarIds: [] };
   }
   const cached = itemSearchIndexCache.get(item);
   if (cached) return cached;
 
+  const downloads = (Array.isArray(item.downloadFiles) ? item.downloadFiles : [])
+    .map((file) => ({
+      file,
+      variants: buildLiteralSearchVariants(`${file?.label || ""} ${file?.detail || ""}`),
+    }));
+  const detectedAvatarIds = new Set(
+    downloads.flatMap(({ file }) => findAvatarProfileIdsInText(file?.label || "")),
+  );
+
   const index = {
     title: buildLiteralSearchVariants(item.title),
     seller: buildLiteralSearchVariants(item.sellerName),
-    downloads: (Array.isArray(item.downloadFiles) ? item.downloadFiles : [])
-      .map((file) => ({
-        file,
-        variants: buildLiteralSearchVariants(`${file?.label || ""} ${file?.detail || ""}`),
-      })),
+    downloads,
+    ownedAvatarIds: [...detectedAvatarIds],
   };
   itemSearchIndexCache.set(item, index);
   return index;
@@ -65,6 +72,26 @@ export function matchingDownloadFiles(item, query) {
   return searchIndexForItem(item).downloads
     .filter(({ variants }) => variantsMatch(queryVariants, variants))
     .map(({ file }) => file);
+}
+
+export function getOwnedAvatarProfileIds(item) {
+  return [...searchIndexForItem(item).ownedAvatarIds];
+}
+
+function searchableSupportedAvatarIds(item) {
+  const ownedAvatarIds = getOwnedAvatarProfileIds(item);
+  if (ownedAvatarIds.length) return ownedAvatarIds;
+  return Array.isArray(item?.supportedAvatarIds) ? item.supportedAvatarIds : [];
+}
+
+function supportedAvatarIdsMatchingSet(item, queryAvatarIds) {
+  if (!queryAvatarIds.size) return [];
+  return searchableSupportedAvatarIds(item)
+    .filter((profileId) => queryAvatarIds.has(profileId));
+}
+
+export function matchingSupportedAvatarIds(item, query) {
+  return supportedAvatarIdsMatchingSet(item, new Set(buildAvatarProfileIds(query)));
 }
 
 function normalizeDownloadFileMetadata(file) {
@@ -143,13 +170,21 @@ export function filterItems(items, filters = {}) {
     const downloadMatches = searchIndex.downloads.some(({ variants }) => (
       variantsMatch(queryVariants, variants)
     ));
-    const supportMatches = queryAvatarIds.size > 0
-      && (Array.isArray(item.supportedAvatarIds) ? item.supportedAvatarIds : [])
-        .some((profileId) => queryAvatarIds.has(profileId));
+    const supportMatches = supportedAvatarIdsMatchingSet(item, queryAvatarIds).length > 0;
 
     if (searchField === "title") return titleMatches;
     if (searchField === "seller") return sellerMatches;
     if (searchField === "download") return downloadMatches;
+
+    // A product title can advertise every supported avatar even when the user
+    // owns only one variation. In the combined search, confirmed download-file
+    // variations take precedence over those product-wide title/description hits.
+    if (
+      queryAvatarIds.size
+      && searchIndex.ownedAvatarIds.length
+      && !searchIndex.ownedAvatarIds.some((profileId) => queryAvatarIds.has(profileId))
+    ) return false;
+
     return titleMatches || sellerMatches || downloadMatches || supportMatches;
   });
 }

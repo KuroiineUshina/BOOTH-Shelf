@@ -585,7 +585,7 @@ function showRedPillError(error) {
 async function runDemoSpending() {
   const phases = [
     [18, t("구매 내역 페이지 확인 중")],
-    [52, t("완료된 주문 모으는 중")],
+    [52, t("결제 확인된 주문 모으는 중")],
     [82, t("결제 금액 더하는 중")],
     [100, t("빨간약 제조 완료")],
   ];
@@ -617,7 +617,7 @@ async function calculateSpending() {
   refs["red-pill-calculate"].textContent = t("계산 중…");
   setRedPillProgress({
     message: t("BOOTH 구매 내역 연결 중"),
-    detail: t("완료 주문만 합산합니다."),
+    detail: t("결제가 확인된 주문만 합산합니다."),
     percent: 3,
   });
 
@@ -2081,6 +2081,7 @@ function captureViewportPosition() {
   return {
     x: window.scrollX,
     y: window.scrollY,
+    visibleLimit: ui.visibleLimit,
     anchors,
   };
 }
@@ -2104,6 +2105,7 @@ function restoreViewportPosition(snapshot) {
 
 function renderPreservingViewport(options) {
   const snapshot = captureViewportPosition();
+  ui.visibleLimit = Math.max(ui.visibleLimit, snapshot.visibleLimit || PAGE_SIZE);
   render(options);
   restoreViewportPosition(snapshot);
   window.requestAnimationFrame?.(() => restoreViewportPosition(snapshot));
@@ -3328,7 +3330,8 @@ function bindStorageChanges() {
         state = await loadState();
         downloadCardStates.clear();
         selectedItemKeys.clear();
-        resetResultWindow();
+        // Keep the already loaded result window so storage writes cannot collapse the page height.
+        ui.visibleLimit = Math.max(viewportPosition.visibleLimit || PAGE_SIZE, PAGE_SIZE);
         render();
         restoreViewportPosition(viewportPosition);
         window.requestAnimationFrame?.(() => restoreViewportPosition(viewportPosition));

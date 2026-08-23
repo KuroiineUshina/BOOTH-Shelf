@@ -8,6 +8,7 @@ import {
 export const STORAGE_KEY = "boothShelfState";
 export const PREFERENCES_KEY = "boothShelfPreferences";
 export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
+export const SPENDING_SUMMARY_VERSION = 2;
 export const ORGANIZATION_BACKUP_FORMAT = "booth-shelf-organization";
 export const ORGANIZATION_BACKUP_VERSION = 4;
 export const DEFAULT_SIDEBAR_WIDTH = 272;
@@ -88,7 +89,7 @@ export function sanitizePreferences(value) {
 }
 
 export function sanitizeSpendingSummary(value) {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value) || value.version !== SPENDING_SUMMARY_VERSION) return null;
   const scannedAt = cleanDate(value.scannedAt);
   if (!scannedAt || !isRecord(value.totals)) return null;
 
@@ -101,6 +102,7 @@ export function sanitizeSpendingSummary(value) {
   if (!Object.keys(totals).length) return null;
 
   return {
+    version: SPENDING_SUMMARY_VERSION,
     totals,
     orderCount: nonNegativeInteger(value.orderCount),
     freeOrderCount: nonNegativeInteger(value.freeOrderCount),
@@ -547,7 +549,10 @@ export async function loadSpendingSummary() {
 }
 
 export async function saveSpendingSummary(summary) {
-  const sanitized = sanitizeSpendingSummary(summary);
+  const sanitized = sanitizeSpendingSummary({
+    ...(isRecord(summary) ? summary : {}),
+    version: SPENDING_SUMMARY_VERSION,
+  });
   if (!sanitized) throw new Error("저장할 결제 합계 정보가 올바르지 않습니다.");
   if (!hasChromeStorage()) {
     memorySpendingSummary = sanitized;

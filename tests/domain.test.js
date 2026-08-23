@@ -12,8 +12,10 @@ import {
   folderDepth,
   getDescendantIds,
   getItemFolderIds,
+  getOwnedAvatarProfileIds,
   itemHasSource,
   matchingDownloadFiles,
+  matchingSupportedAvatarIds,
   moveFolder,
   reorderSortPriority,
   renameCategory,
@@ -380,8 +382,52 @@ test("상품명과 파일명에 없어도 상품 설명에서 확인한 지원 �
       "product:description-only",
     ]);
   }
+  assert.deepEqual(matchingDownloadFiles(items[0], "미사키"), []);
+  assert.deepEqual(matchingSupportedAvatarIds(items[0], "미사키"), ["misaki"]);
+  assert.deepEqual(matchingSupportedAvatarIds(items[0], "마야"), []);
   assert.deepEqual(filterItems(items, { query: "마야" }), []);
   assert.deepEqual(filterItems(items, { query: "미사키", searchField: "title" }), []);
+});
+
+test("미즈키 설명 일치는 이름 없는 공용 ZIP을 검색 결과에 유지한다", () => {
+  const items = [{
+    key: "product:shared-bundle",
+    title: "Milk Cloud",
+    sellerName: "BalGu",
+    downloadFiles: [{ label: "__Milk_Cloud__.zip", detail: "28 MB" }],
+    supportedAvatarIds: ["mizuki"],
+  }];
+
+  for (const query of ["Mizuki", "미즈키", "瑞希"]) {
+    assert.deepEqual(filterItems(items, { query }).map((item) => item.key), [
+      "product:shared-bundle",
+    ]);
+    assert.deepEqual(matchingDownloadFiles(items[0], query), []);
+    assert.deepEqual(matchingSupportedAvatarIds(items[0], query), ["mizuki"]);
+  }
+  assert.deepEqual(filterItems(items, { query: "미즈키", searchField: "download" }), []);
+});
+
+test("상품 전체는 미즈키를 지원해도 보유 파일이 밀티나 전용이면 미즈키에서 제외한다", () => {
+  const items = [{
+    key: "product:plum-update",
+    title: "✨Plum Update✨【Milltina / Mizuki / Shinano 対応】",
+    sellerName: "Yume Haus",
+    downloadFiles: [
+      { label: "Snow_Pom_Cape_Materials.zip", detail: "18 MB" },
+      { label: "Snow_Pom_Cape_PSD.zip", detail: "22 MB" },
+      { label: "Milltina_snow_Pom_Cape.zip", detail: "31 MB" },
+    ],
+    supportedAvatarIds: ["mizuki", "shinano"],
+  }];
+
+  assert.deepEqual(getOwnedAvatarProfileIds(items[0]), ["milltina"]);
+  assert.deepEqual(matchingSupportedAvatarIds(items[0], "미즈키"), []);
+  assert.deepEqual(filterItems(items, { query: "미즈키" }), []);
+  assert.deepEqual(matchingSupportedAvatarIds(items[0], "밀티나"), ["milltina"]);
+  assert.deepEqual(filterItems(items, { query: "밀티나" }).map((item) => item.key), [
+    "product:plum-update",
+  ]);
 });
 
 test("카드에서 새로 확인한 다운로드 파일명을 검색용 상품 데이터에 반영한다", () => {
