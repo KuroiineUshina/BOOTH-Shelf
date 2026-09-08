@@ -10,79 +10,116 @@
   <body>
     <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
 
-    <div class="app-shell">
-      <aside class="sidebar" id="sidebar" aria-label="컬렉션 탐색">
+    <header class="topbar" id="global-header">
+      <div class="topbar-brand">
+        <button class="icon-button sidebar-open" id="sidebar-open" type="button" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="false">
+          <span class="licon licon-menu" aria-hidden="true"></span>
+        </button>
         <div class="brand-block">
           <img class="brand-mark" src="assets/icon128.png" alt="" aria-hidden="true">
           <div>
             <p class="brand-name">BOOTH Shelf</p>
             <p class="brand-caption">Private library</p>
           </div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button class="red-pill-button" id="red-pill-button" type="button" aria-label="빨간약" title="빨간약" aria-haspopup="dialog" aria-controls="red-pill-dialog">
+          <span class="red-pill-button-icon licon licon-pill" aria-hidden="true"></span>
+          <span class="button-label">빨간약</span>
+        </button>
+        <a
+          class="header-icon-button kofi-header-button"
+          href="https://ko-fi.com/kuroiineushina"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Ko-fi에서 개발자 후원하기 (새 탭)"
+          title="개발자 후원하기"
+        >
+          <img src="assets/kofi/kofi-cup.png" alt="" aria-hidden="true">
+        </a>
+        <button class="language-toggle" id="language-toggle" type="button" aria-label="언어 변경" title="언어 변경">
+          <span class="licon licon-languages" aria-hidden="true"></span>
+        </button>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="테마 변경: 현재 라이트 모드, 다음 다크 모드" title="테마 변경: 현재 라이트 모드, 다음 다크 모드">
+          <span class="licon licon-sun" id="theme-toggle-icon" aria-hidden="true"></span>
+        </button>
+        <button class="header-icon-button settings-button" id="settings-button" type="button" aria-label="설정 열기" title="설정" aria-haspopup="dialog" aria-controls="settings-dialog">
+          <span class="licon licon-settings" aria-hidden="true"></span>
+        </button>
+      </div>
+    </header>
+
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="컬렉션 탐색">
+        <div class="sidebar-mobile-header">
+          <strong>BOOTH Shelf</strong>
           <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="메뉴 닫기">
             <span class="licon licon-x" aria-hidden="true"></span>
           </button>
         </div>
 
-        <nav class="collection-nav" aria-labelledby="collection-heading">
-          <p class="sidebar-label" id="collection-heading">컬렉션</p>
-          <button class="nav-row is-active" type="button" data-source="all">
-            <span class="nav-icon licon licon-layout-grid" aria-hidden="true"></span>
-            <span class="nav-label">전체 상품</span>
-            <span class="nav-count" id="all-count">0</span>
-          </button>
-          <button class="nav-row" type="button" data-source="purchased">
-            <span class="nav-icon licon licon-shopping-bag" aria-hidden="true"></span>
-            <span class="nav-label">구매한 상품</span>
-            <span class="nav-count" id="purchased-count">0</span>
-          </button>
-          <button class="nav-row" type="button" data-source="gift">
-            <span class="nav-icon licon licon-gift" aria-hidden="true"></span>
-            <span class="nav-label">받은 기프트</span>
-            <span class="nav-count" id="gift-count">0</span>
-          </button>
-          <button class="nav-row" type="button" data-source="free">
-            <span class="nav-icon licon licon-download" aria-hidden="true"></span>
-            <span class="nav-label">무료 상품</span>
-            <span class="nav-count" id="free-count">0</span>
-          </button>
-          <button class="nav-row" type="button" id="favorites-nav">
-            <span class="nav-icon licon licon-star" aria-hidden="true"></span>
-            <span class="nav-label">즐겨찾기</span>
-            <span class="nav-count" id="favorites-count">0</span>
-          </button>
-        </nav>
+        <div class="sidebar-scroll">
+          <nav class="collection-nav" aria-labelledby="collection-heading">
+            <p class="sidebar-label" id="collection-heading">컬렉션</p>
+            <button class="nav-row is-active" type="button" data-source="all">
+              <span class="nav-icon licon licon-layout-grid" aria-hidden="true"></span>
+              <span class="nav-label">전체 상품</span>
+              <span class="nav-count" id="all-count">0</span>
+            </button>
+            <button class="nav-row" type="button" data-source="purchased">
+              <span class="nav-icon licon licon-shopping-bag" aria-hidden="true"></span>
+              <span class="nav-label">구매한 상품</span>
+              <span class="nav-count" id="purchased-count">0</span>
+            </button>
+            <button class="nav-row" type="button" data-source="gift">
+              <span class="nav-icon licon licon-gift" aria-hidden="true"></span>
+              <span class="nav-label">받은 기프트</span>
+              <span class="nav-count" id="gift-count">0</span>
+            </button>
+            <button class="nav-row" type="button" data-source="free">
+              <span class="nav-icon licon licon-download" aria-hidden="true"></span>
+              <span class="nav-label">무료 상품</span>
+              <span class="nav-count" id="free-count">0</span>
+            </button>
+            <button class="nav-row" type="button" id="favorites-nav">
+              <span class="nav-icon licon licon-star" aria-hidden="true"></span>
+              <span class="nav-label">즐겨찾기</span>
+              <span class="nav-count" id="favorites-count">0</span>
+            </button>
+          </nav>
 
-        <section class="folder-section" aria-labelledby="folder-heading">
-          <div class="sidebar-section-heading">
-            <p class="sidebar-label" id="folder-heading">내 폴더</p>
-            <div class="sidebar-section-actions">
-              <button class="mini-button" id="add-root-folder" type="button" aria-label="최상위 폴더 추가" title="최상위 폴더 추가">
-                <span class="licon licon-plus" aria-hidden="true"></span>
-              </button>
-              <button class="mini-button" id="add-category" type="button" aria-label="카테고리 추가" title="카테고리 추가">
-                <span class="licon licon-folders" aria-hidden="true"></span>
-              </button>
+          <section class="folder-section" aria-labelledby="folder-heading">
+            <div class="sidebar-section-heading">
+              <p class="sidebar-label" id="folder-heading">내 폴더</p>
+              <div class="sidebar-section-actions">
+                <button class="mini-button" id="add-root-folder" type="button" aria-label="최상위 폴더 추가" title="최상위 폴더 추가">
+                  <span class="licon licon-plus" aria-hidden="true"></span>
+                </button>
+                <button class="mini-button" id="add-category" type="button" aria-label="카테고리 추가" title="카테고리 추가">
+                  <span class="licon licon-folders" aria-hidden="true"></span>
+                </button>
+              </div>
             </div>
-          </div>
 
-          <button class="folder-row folder-system-row is-active" id="all-folders" type="button">
-            <span class="folder-glyph licon licon-folders" aria-hidden="true"></span>
-            <span class="folder-name">모든 폴더</span>
-          </button>
-          <button class="folder-row folder-system-row" id="unfiled-folder" type="button" data-drop-folder-id="" title="상품 카드를 끌어 놓아 미분류로 이동">
-            <span class="folder-glyph licon licon-folder-open" aria-hidden="true"></span>
-            <span class="folder-name">미분류</span>
-            <span class="folder-count" id="unfiled-count">0</span>
-          </button>
+            <button class="folder-row folder-system-row is-active" id="all-folders" type="button">
+              <span class="folder-glyph licon licon-folders" aria-hidden="true"></span>
+              <span class="folder-name">모든 폴더</span>
+            </button>
+            <button class="folder-row folder-system-row" id="unfiled-folder" type="button" data-drop-folder-id="" title="상품 카드를 끌어 놓아 미분류로 이동">
+              <span class="folder-glyph licon licon-folder-open" aria-hidden="true"></span>
+              <span class="folder-name">미분류</span>
+              <span class="folder-count" id="unfiled-count">0</span>
+            </button>
 
-          <div class="folder-tree" id="folder-tree" role="tree" aria-label="사용자 폴더"></div>
+            <div class="folder-tree" id="folder-tree" role="group" aria-label="사용자 폴더"></div>
 
-        </section>
+          </section>
 
-        <div class="sidebar-spacer"></div>
-        <p class="service-version" id="service-version" aria-label="버전 1.0.8">
+        </div>
+        <p class="service-version" id="service-version" role="note" aria-label="버전 1.0.9">
           <span>버전</span>
-          <strong>1.0.8</strong>
+          <strong>1.0.9</strong>
         </p>
         <div
           class="sidebar-resizer"
@@ -97,15 +134,28 @@
         ></div>
       </aside>
 
-      <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="메뉴 닫기"></button>
+      <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="메뉴 닫기" aria-hidden="true" tabindex="-1"></button>
 
       <main class="main-panel" id="main-content">
-        <header class="topbar">
-          <button class="icon-button sidebar-open" id="sidebar-open" type="button" aria-label="메뉴 열기">
-            <span class="licon licon-menu" aria-hidden="true"></span>
-          </button>
 
-          <div class="search-cluster">
+        <section class="hero-row" aria-labelledby="view-title">
+          <div>
+            <p class="eyebrow" id="view-eyebrow">내 BOOTH 보관함</p>
+            <h1 id="view-title">전체 상품</h1>
+            <p class="view-description" id="view-description">구매한 상품, 받은 기프트와 무료 다운로드를 한눈에 확인하세요.</p>
+          </div>
+
+          <div class="hero-meta">
+            <button class="sync-button" id="sync-button" type="button" aria-label="전체 동기화" title="전체 동기화">
+              <span class="sync-symbol licon licon-refresh-cw" aria-hidden="true"></span>
+              <span class="button-label">전체 동기화</span>
+            </button>
+            <div class="sync-meta" id="last-sync">아직 동기화하지 않았어요</div>
+          </div>
+        </section>
+
+        <section class="library-toolbar" aria-label="상품 검색">
+          <search class="search-cluster" aria-label="상품 검색">
             <label class="search-box" for="search-input">
               <span class="search-symbol licon licon-search" aria-hidden="true"></span>
               <input
@@ -116,6 +166,9 @@
                 placeholder="상품명·판매자·파일명·지원 아바타 검색"
               >
               <kbd class="search-shortcut">/</kbd>
+              <button class="search-clear" id="search-clear" type="button" aria-label="검색어 지우기" title="검색어 지우기" hidden>
+                <span class="licon licon-x" aria-hidden="true"></span>
+              </button>
             </label>
             <label class="field-select compact-select">
               <span class="sr-only">검색 대상</span>
@@ -126,48 +179,8 @@
                 <option value="download">파일명</option>
               </select>
             </label>
-          </div>
-
-          <div class="topbar-actions">
-            <button class="red-pill-button" id="red-pill-button" type="button" aria-haspopup="dialog" aria-controls="red-pill-dialog">
-              <span class="red-pill-button-icon licon licon-pill" aria-hidden="true"></span>
-              <span class="button-label">빨간약</span>
-            </button>
-            <a
-              class="header-icon-button kofi-header-button"
-              href="https://ko-fi.com/kuroiineushina"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Ko-fi에서 개발자 후원하기 (새 탭)"
-              title="개발자 후원하기"
-            >
-              <img src="assets/kofi/kofi-cup.png" alt="" aria-hidden="true">
-            </a>
-            <button class="language-toggle" id="language-toggle" type="button" aria-label="언어 변경" title="언어 변경">
-              <span class="licon licon-languages" aria-hidden="true"></span>
-            </button>
-            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="테마 변경: 현재 라이트 모드, 다음 다크 모드" title="테마 변경: 현재 라이트 모드, 다음 다크 모드">
-              <span class="licon licon-sun" id="theme-toggle-icon" aria-hidden="true"></span>
-            </button>
-            <button class="header-icon-button settings-button" id="settings-button" type="button" aria-label="설정 열기" title="설정" aria-haspopup="dialog" aria-controls="settings-dialog">
-              <span class="licon licon-settings" aria-hidden="true"></span>
-            </button>
-            <button class="sync-button" id="sync-button" type="button">
-              <span class="sync-symbol licon licon-refresh-cw" aria-hidden="true"></span>
-              <span class="button-label">전체 동기화</span>
-            </button>
-          </div>
-        </header>
-
-        <section class="hero-row" aria-labelledby="view-title">
-          <div>
-            <p class="eyebrow" id="view-eyebrow">내 BOOTH 보관함</p>
-            <h1 id="view-title">전체 상품</h1>
-            <p class="view-description" id="view-description">구매한 상품, 받은 기프트와 무료 다운로드를 한눈에 확인하세요.</p>
-          </div>
-
-          <div class="hero-meta">
-            <div class="sync-meta" id="last-sync">아직 동기화하지 않았어요</div>
+          </search>
+          <div class="view-controls">
             <label class="grid-density-control" title="카드 배열 조절">
               <span class="grid-density-icon licon licon-grid-3x3" aria-hidden="true"></span>
               <input
@@ -234,7 +247,6 @@
             <span class="selection-summary-hint">선택한 카드를 폴더로 드래그</span>
             <button class="selection-clear" id="selection-clear" type="button">선택 해제</button>
           </div>
-          <button class="clear-filter" id="clear-filter" type="button" hidden>필터 초기화</button>
         </section>
 
         <section class="item-grid" id="item-grid" aria-label="상품 목록"></section>
@@ -258,7 +270,7 @@
 
     <div class="context-menu" id="context-menu" role="menu" aria-label="빠른 메뉴" hidden></div>
 
-    <dialog class="modal" id="folder-dialog">
+    <dialog class="modal" id="folder-dialog" aria-labelledby="folder-dialog-title">
       <form method="dialog" id="folder-form">
         <div class="modal-header">
           <div>
@@ -295,12 +307,12 @@
       </form>
     </dialog>
 
-    <dialog class="modal compact-modal settings-dialog" id="settings-dialog">
+    <dialog class="modal compact-modal settings-dialog" id="settings-dialog" aria-labelledby="settings-dialog-title">
       <div class="settings-dialog-content">
         <div class="modal-header">
           <div>
             <p class="eyebrow">설정</p>
-            <h2>데이터 관리</h2>
+            <h2 id="settings-dialog-title">데이터 관리</h2>
           </div>
           <button class="icon-button modal-close" type="button" data-close-dialog="settings-dialog" aria-label="닫기">
             <span class="licon licon-x" aria-hidden="true"></span>
@@ -334,12 +346,12 @@
       </div>
     </dialog>
 
-    <dialog class="modal compact-modal" id="assign-dialog">
+    <dialog class="modal compact-modal" id="assign-dialog" aria-labelledby="assign-dialog-title">
       <form method="dialog" id="assign-form">
         <div class="modal-header">
           <div>
             <p class="eyebrow">상품 분류</p>
-            <h2>폴더 선택</h2>
+            <h2 id="assign-dialog-title">폴더 선택</h2>
           </div>
             <button class="icon-button modal-close" type="button" data-close-dialog="assign-dialog" aria-label="닫기">
               <span class="licon licon-x" aria-hidden="true"></span>
@@ -358,7 +370,7 @@
       </form>
     </dialog>
 
-    <dialog class="modal compact-modal" id="confirm-dialog">
+    <dialog class="modal compact-modal" id="confirm-dialog" aria-labelledby="confirm-dialog-title">
       <form method="dialog" id="confirm-form">
         <div class="modal-header">
           <div>
@@ -377,12 +389,12 @@
       </form>
     </dialog>
 
-    <dialog class="modal compact-modal" id="data-delete-dialog">
+    <dialog class="modal compact-modal" id="data-delete-dialog" aria-labelledby="data-delete-title">
       <form method="dialog" id="data-delete-form">
         <div class="modal-header">
           <div>
             <p class="eyebrow">개인정보 보호</p>
-            <h2>저장 데이터를 모두 삭제할까요?</h2>
+            <h2 id="data-delete-title">저장 데이터를 모두 삭제할까요?</h2>
           </div>
             <button class="icon-button modal-close" type="button" data-close-dialog="data-delete-dialog" aria-label="닫기">
               <span class="licon licon-x" aria-hidden="true"></span>
@@ -396,12 +408,12 @@
       </form>
     </dialog>
 
-    <dialog class="modal compact-modal" id="organization-restore-dialog">
+    <dialog class="modal compact-modal" id="organization-restore-dialog" aria-labelledby="organization-restore-title">
       <form method="dialog" id="organization-restore-form">
         <div class="modal-header">
           <div>
             <p class="eyebrow">정리 데이터 복원</p>
-            <h2>이 백업으로 정리 데이터를 바꿀까요?</h2>
+            <h2 id="organization-restore-title">이 백업으로 정리 데이터를 바꿀까요?</h2>
           </div>
           <button class="icon-button modal-close" type="button" data-close-dialog="organization-restore-dialog" aria-label="닫기">
             <span class="licon licon-x" aria-hidden="true"></span>
@@ -416,12 +428,12 @@
       </form>
     </dialog>
 
-    <dialog class="modal red-pill-modal" id="red-pill-dialog">
+    <dialog class="modal red-pill-modal" id="red-pill-dialog" aria-labelledby="red-pill-title">
       <div class="red-pill-dialog-content">
         <div class="modal-header">
           <div>
             <p class="eyebrow red-pill-eyebrow">FUN STAT</p>
-            <h2>BOOTH 빨간약</h2>
+            <h2 id="red-pill-title">BOOTH 빨간약</h2>
           </div>
           <button class="icon-button modal-close" type="button" data-close-dialog="red-pill-dialog" aria-label="닫기">
             <span class="licon licon-x" aria-hidden="true"></span>

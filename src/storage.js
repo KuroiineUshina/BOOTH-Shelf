@@ -4,6 +4,7 @@ import {
   sanitizeSellerUrl,
   sanitizeSourcePageUrl,
 } from "./urls.js";
+import { withExclusiveLock } from "./concurrency.js";
 
 export const STORAGE_KEY = "boothShelfState";
 export const PREFERENCES_KEY = "boothShelfPreferences";
@@ -15,6 +16,20 @@ export const DEFAULT_SIDEBAR_WIDTH = 272;
 export const MIN_SIDEBAR_WIDTH = 220;
 export const MAX_SIDEBAR_WIDTH = 420;
 export const DEFAULT_GRID_COLUMNS = 4;
+export const MAX_ORGANIZATION_BACKUP_BYTES = 32 * 1024 * 1024;
+
+const writerId = crypto.randomUUID();
+let memoryOnly = false;
+const storageLockName = (name) => memoryOnly ? `${name}:${writerId}` : name;
+const withStorageLock = (task) => withExclusiveLock(storageLockName("booth-shelf-state-write"), task);
+
+export function runLibraryOperation(task) {
+  return withExclusiveLock(storageLockName("booth-shelf-library-operation"), task, { wait: false });
+}
+
+export function isOwnStorageChange(value) {
+  return value?._writerId === writerId;
+}
 
 const MAX_STORED_ITEMS = 50_000;
 const MAX_ITEM_LOCATIONS = 256;
@@ -450,6 +465,23 @@ export function createOrganizationBackup(value, exportedAt = new Date()) {
   };
 }
 
+export function encodeOrganizationBackup(value, exportedAt = new Date()) {
+  const text = `${JSON.stringify(createOrganizationBackup(value, exportedAt), null, 2)}\n`;
+  assertBackupSize(new TextEncoder().encode(text).byteLength);
+  return text;
+}
+
+export function assertBackupSize(bytes) {
+  if (bytes > MAX_ORGANIZATION_BACKUP_BYTES) {
+    throw new Error("백업 파일은 32MB 이하여야 합니다.");
+  }
+}
+
+export function decodeOrganizationBackup(text) {
+  assertBackupSize(new TextEncoder().encode(text).byteLength);
+  return JSON.parse(text.replace(/^\uFEFF/u, ""));
+}
+
 export function restoreOrganizationBackup(currentValue, backupValue) {
   const supportedBackupVersions = [1, 2, 3, ORGANIZATION_BACKUP_VERSION];
   if (!isRecord(backupValue)
@@ -502,12 +534,19 @@ export function restoreOrganizationBackup(currentValue, backupValue) {
 }
 
 function hasChromeStorage() {
-  return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
+  return !memoryOnly && typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
 }
 
 let memoryState = cloneDefaultState();
 let memoryPreferences = sanitizePreferences(null);
 let memorySpendingSummary = null;
+
+export function useMemoryStorage(initialState) {
+  memoryOnly = true;
+  memoryState = sanitizeState(initialState);
+  memoryPreferences = sanitizePreferences(null);
+  memorySpendingSummary = null;
+}
 
 export async function loadState() {
   if (!hasChromeStorage()) return sanitizeState(memoryState);
@@ -515,15 +554,23 @@ export async function loadState() {
   return sanitizeState(result[STORAGE_KEY]);
 }
 
-export async function saveState(state) {
+async function writeState(state) {
   const sanitized = sanitizeState(state);
   if (!hasChromeStorage()) {
     memoryState = sanitized;
     return sanitized;
   }
 
-  await chrome.storage.local.set({ [STORAGE_KEY]: sanitized });
+  await chrome.storage.local.set({ [STORAGE_KEY]: { ...sanitized, _writerId: writerId } });
   return sanitized;
+}
+
+export function saveState(state) {
+  return withStorageLock(() => writeState(state));
+}
+
+export function updateState(mutate) {
+  return withStorageLock(async () => writeState(await mutate(await loadState())));
 }
 
 export async function loadPreferences() {
@@ -532,14 +579,22 @@ export async function loadPreferences() {
   return sanitizePreferences(result[PREFERENCES_KEY]);
 }
 
-export async function savePreferences(preferences) {
+async function writePreferences(preferences) {
   const sanitized = sanitizePreferences(preferences);
   if (!hasChromeStorage()) {
     memoryPreferences = sanitized;
     return sanitized;
   }
-  await chrome.storage.local.set({ [PREFERENCES_KEY]: sanitized });
+  await chrome.storage.local.set({ [PREFERENCES_KEY]: { ...sanitized, _writerId: writerId } });
   return sanitized;
+}
+
+export function savePreferences(preferences) {
+  return withStorageLock(() => writePreferences(preferences));
+}
+
+export function updatePreferences(mutate) {
+  return withStorageLock(async () => writePreferences(await mutate(await loadPreferences())));
 }
 
 export async function loadSpendingSummary() {
@@ -548,7 +603,7 @@ export async function loadSpendingSummary() {
   return sanitizeSpendingSummary(result[SPENDING_SUMMARY_KEY]);
 }
 
-export async function saveSpendingSummary(summary) {
+async function writeSpendingSummary(summary) {
   const sanitized = sanitizeSpendingSummary({
     ...(isRecord(summary) ? summary : {}),
     version: SPENDING_SUMMARY_VERSION,
@@ -558,18 +613,24 @@ export async function saveSpendingSummary(summary) {
     memorySpendingSummary = sanitized;
     return sanitized;
   }
-  await chrome.storage.local.set({ [SPENDING_SUMMARY_KEY]: sanitized });
+  await chrome.storage.local.set({ [SPENDING_SUMMARY_KEY]: { ...sanitized, _writerId: writerId } });
   return sanitized;
 }
 
+export function saveSpendingSummary(summary) {
+  return withStorageLock(() => writeSpendingSummary(summary));
+}
+
 export async function clearState() {
-  memoryState = cloneDefaultState();
-  memoryPreferences = sanitizePreferences(null);
-  memorySpendingSummary = null;
-  if (hasChromeStorage()) {
-    await chrome.storage.local.remove([STORAGE_KEY, PREFERENCES_KEY, SPENDING_SUMMARY_KEY]);
-  }
-  return cloneDefaultState();
+  return withStorageLock(async () => {
+    if (hasChromeStorage()) {
+      await chrome.storage.local.remove([STORAGE_KEY, PREFERENCES_KEY, SPENDING_SUMMARY_KEY]);
+    }
+    memoryState = cloneDefaultState();
+    memoryPreferences = sanitizePreferences(null);
+    memorySpendingSummary = null;
+    return cloneDefaultState();
+  });
 }
 
 export async function restrictStorageAccess() {

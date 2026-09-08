@@ -286,8 +286,12 @@ function buildLiteralVariants(value) {
 
 function buildBaseSearchVariants(value) {
   const raw = String(value ?? "").normalize("NFC");
+  const kanaRuns = /[ァ-ヺー]{2,}|[ぁ-ゖー]{2,}/gu;
   const variants = new Set([
-    ...buildLiteralVariants(raw),
+    normalizeSearchText(raw),
+    normalizeSearchText(raw.replace(kanaRuns, (run) => hiraganaToKatakana(run))),
+    normalizeSearchText(raw.replace(kanaRuns, (run) => katakanaToRomaji(hiraganaToKatakana(run)))),
+    normalizeSearchText(raw.replace(kanaRuns, (run) => katakanaToHangul(hiraganaToKatakana(run)))),
     normalizeSearchText(englishKeyboardToHangul(raw)),
     normalizeSearchText(hangulToEnglishKeyboard(raw)),
   ].filter(Boolean));

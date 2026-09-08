@@ -28,6 +28,17 @@ for (const [source, version] of Object.entries(versions)) {
   }
 }
 
+if (!/^\d+\.\d+\.\d+$/.test(expectedVersion)) {
+  throw new Error("Project version must use X.Y.Z format.");
+}
+for (const name of ["RELEASE_NOTES", "TWITTER_POST"]) {
+  const file = new URL(`../store-assets/${name}_${expectedVersion}.md`, import.meta.url);
+  const content = await readFile(file, "utf8");
+  if (!content.trim() || !content.includes(expectedVersion)) {
+    throw new Error(`${name} does not describe project version ${expectedVersion}.`);
+  }
+}
+
 console.log(tag
   ? `Release version verified: ${tag}`
   : `Project versions match: ${expectedVersion}`);

@@ -10,7 +10,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.0.8");
+  assert.equal(manifest.version, "1.0.9");
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.version_name, manifest.version);
   assert.deepEqual(manifest.permissions, ["storage"]);
@@ -34,6 +34,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     "src/app.js",
     "src/avatar-aliases.js",
     "src/booth.js",
+    "src/concurrency.js",
     "src/i18n.js",
     "src/search.js",
     "src/storage.js",
@@ -41,6 +42,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     "assets/lucide/lucide.woff2",
     "assets/lucide/LICENSE",
     "assets/kofi/kofi-cup.png",
+    "assets/gift/gift-ribbon-corner.png",
     "assets/paperlogy/Paperlogy-4Regular.ttf",
     "assets/paperlogy/Paperlogy-5Medium.ttf",
     "assets/paperlogy/Paperlogy-6SemiBold.ttf",
@@ -72,7 +74,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(dashboard, /id="confirm-dialog-eyebrow"/);
   assert.match(dashboard, /id="confirm-dialog-title"/);
   assert.match(dashboard, /id="confirm-submit"/);
-  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.8"/);
+  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.9"/);
   assert.match(dashboard, /id="theme-toggle"/);
   assert.match(dashboard, /class="licon licon-sun" id="theme-toggle-icon"/);
   assert.doesNotMatch(dashboard, /id="theme-toggle"[^>]*aria-pressed/);
@@ -112,6 +114,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     paperlogyLicense,
     mPlusLicense,
     kofiPng,
+    giftRibbonPng,
     releaseWorkflow,
     releaseNotes,
     twitterPost,
@@ -124,9 +127,10 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     readFile(path.join(root, "assets/paperlogy/OFL.txt"), "utf8"),
     readFile(path.join(root, "assets/m-plus-1/OFL.txt"), "utf8"),
     readFile(path.join(root, "assets/kofi/kofi-cup.png")),
+    readFile(path.join(root, "assets/gift/gift-ribbon-corner.png")),
     readFile(path.join(root, ".github/workflows/release.yml"), "utf8"),
-    readFile(path.join(root, "store-assets/RELEASE_NOTES_1.0.5.md"), "utf8"),
-    readFile(path.join(root, "store-assets/TWITTER_POST_1.0.5.md"), "utf8"),
+    readFile(path.join(root, `store-assets/RELEASE_NOTES_${manifest.version}.md`), "utf8"),
+    readFile(path.join(root, `store-assets/TWITTER_POST_${manifest.version}.md`), "utf8"),
   ]);
   const legacyIconGlyphs = /[×▦▣◇☆★＋▰▱□♥↗☰⌕☀☾↻↕←↓›]/u;
   assert.doesNotMatch(`${dashboard}\n${app}`, legacyIconGlyphs);
@@ -194,28 +198,37 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(paperlogyLicense, /SIL OPEN FONT LICENSE Version 1\.1/);
   assert.match(mPlusLicense, /SIL OPEN FONT LICENSE Version 1\.1/);
   assert.equal(kofiPng[25], 6, "Ko-fi PNG should include an alpha channel");
-  assert.match(releaseWorkflow, /assets\/lucide assets\/kofi assets\/paperlogy assets\/m-plus-1/);
+  assert.equal(giftRibbonPng.readUInt32BE(16), 512, "Gift ribbon PNG width should be 512px");
+  assert.equal(giftRibbonPng.readUInt32BE(20), 512, "Gift ribbon PNG height should be 512px");
+  assert.equal(giftRibbonPng[25], 6, "Gift ribbon PNG should include an alpha channel");
+  assert.match(releaseWorkflow, /assets\/lucide assets\/kofi assets\/paperlogy assets\/m-plus-1 assets\/gift/);
   assert.match(releaseWorkflow, /RELEASE_NOTES_\$\{version\}\.md/);
   assert.match(releaseWorkflow, /gh release view/);
   assert.match(releaseWorkflow, /--notes-file "\$notes_file"/);
   assert.match(releaseWorkflow, /gh release upload[^]*--clobber/);
   assert.doesNotMatch(releaseWorkflow, /sha256sum|\.zip\.sha256/);
   assert.doesNotMatch(releaseWorkflow, /assets\/pretendard|assets\/ibm-plex|assets\/gmarket-sans/);
-  assert.match(releaseNotes, /백업과 복원/);
-  assert.match(releaseNotes, /원통형/);
-  assert.match(releaseNotes, /Misaki/);
+  assert.ok(releaseNotes.includes(manifest.version));
+  assert.ok(twitterPost.includes(manifest.version));
   assert.match(twitterPost, /#BOOTH_Shelf/);
   assert.match(twitterPost, /chromewebstore\.google\.com\/detail\/aibjhdieagkjmcodaiopaklonjbdmbpj/);
   assert.doesNotMatch(twitterPost, /Shift 다중선택|^#BOOTH$/m);
   assert.match(app, /new IntersectionObserver/);
   assert.match(app, /loadNextResultPage/);
   assert.match(app, /className: "item-visual-header"/);
+  const createCardSource = app.slice(app.indexOf("function createCard"), app.indexOf("function findItem"));
+  assert.match(createCardSource, /className: "gift-ribbon-corner"/);
+  assert.match(createCardSource, /aria-label": t\("선물"\)/);
+  assert.match(createCardSource, /className: "source-badge source-free"/);
+  assert.doesNotMatch(createCardSource, /text: t\("구매"\)/);
+  assert.match(styles, /\.gift-ribbon-corner\s*\{[^}]*width:\s*clamp\(104px,\s*52%,\s*156px\);[^}]*assets\/gift\/gift-ribbon-corner\.png/s);
   assert.match(app, /text: t\(assignedFolderIds\.length \? "폴더 관리" : "폴더에 넣기"\)/);
   assert.match(app, /querySelectorAll\('input\[name="assign-folder"\]:checked'\)/);
   assert.match(app, /setItemFolderAssignments\(/);
   assert.match(dashboard, /id="assign-folder-list"/);
   assert.doesNotMatch(dashboard, /id="assign-folder-select"/);
-  assert.match(app, /actions\.append\(assignButton, favoriteButton\)/);
+  assert.match(app, /visualControls\.append\(favoriteButton\)/);
+  assert.match(app, /actions\.append\(revealButton, assignButton\)/);
   assert.match(app, /const LOCALE_SEQUENCE = Object\.freeze\(\["ko", "en", "ja"\]\)/);
   assert.match(app, /refs\["language-toggle"\]\.addEventListener\("click"/);
   assert.match(app, /const THEME_SEQUENCE = Object\.freeze\(\["light", "dark", "system"\]\)/);
@@ -245,8 +258,6 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(app, /document\.documentElement\.dataset\.gridColumns = String\(columns\)/);
   assert.match(app, /function saveGridColumns\(value\)/);
   assert.match(app, /folder\?\.description \|\| t\("이 폴더에 분류한 상품을 보여드려요\."\)/);
-  assert.match(app, /await persistState\(\);[\s\S]{0,220}renderPreservingViewport\(\);/);
-  assert.match(app, /const viewportPosition = captureViewportPosition\(\);[\s\S]{0,500}restoreViewportPosition\(viewportPosition\);/);
   assert.match(app, /deleteCategoryAndReleaseFolders\(/);
   assert.match(app, /download: `booth-shelf-organization-\$\{date\}\.json`/);
   assert.match(styles, /\.licon-languages::before \{ content: "\\e0fe"; \}/);
@@ -271,7 +282,8 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.doesNotMatch(dashboard, /id="folder-drop-hint"/);
   assert.doesNotMatch(styles, /\.folder-actions\s*\{/);
   assert.doesNotMatch(styles, /\.folder-drop-hint\s*\{/);
-  assert.match(styles, /\.sidebar\s*\{[^}]*overflow-y:\s*auto;[^}]*scrollbar-width:\s*none;/s);
+  assert.match(styles, /\.sidebar\s*\{[^}]*overflow-y:\s*hidden;/s);
+  assert.match(styles, /\.sidebar-scroll\s*\{[^}]*overflow-y:\s*auto;[^}]*scrollbar-width:\s*thin;/s);
   assert.match(styles, /\.sidebar::\-webkit-scrollbar\s*\{[^}]*display:\s*none;/s);
   assert.match(styles, /\.sidebar-resizer\s*\{/);
   assert.match(styles, /\.grid-density-control\s*\{/);

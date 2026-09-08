@@ -25,8 +25,9 @@ import {
 const RETRIABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const MAX_RETRY_DELAY_MS = 30_000;
 const MIN_REQUEST_INTERVAL_MS = 300;
+const SYNC_CONCURRENCY = 4;
 let nextRequestAt = 0;
-export const PRODUCT_SUPPORT_INDEX_VERSION = 1;
+export const PRODUCT_SUPPORT_INDEX_VERSION = 2;
 const PRODUCT_SUPPORT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const PRODUCT_SUPPORT_CHECKPOINT_SIZE = 12;
 
@@ -270,6 +271,17 @@ export function getPageNumber(href, sourcePath, baseUrl = BOOTH_ACCOUNTS_ORIGIN)
   }
 }
 
+export function assertLibraryPage({ title, hasMain, itemCount, text, page = 1 }) {
+  const libraryTitle = /(?:library|라이브러리|ライブラリ|資料庫|资源库)/iu.test(title || "");
+  const explicitEmpty = /(?:no\s+(?:(?:purchased|downloaded|available|received)\s+)?(?:items?|products?|gifts?|downloads?)\b|nothing\s+(?:here|purchased|received)|(?:haven['’]?t|have\s+not)\s+(?:purchased|received|downloaded)|(?:상품|선물|기프트|다운로드)[^.!?\n]{0,60}(?:없습니다|없어요|없음)|(?:商品|ギフト|ダウンロード)[^。\n]{0,60}(?:ありません|ない|ありませんでした)|(?:library|collection)\s+is\s+empty)/iu.test(text || "");
+  const unavailable = /(?:maintenance|メンテナンス|점검|service\s+unavailable|temporarily\s+unavailable|try\s+again|잠시\s*후|再試行|captcha|checking\s+your\s+browser)/iu.test(text || "");
+  if (!libraryTitle || !hasMain || (!itemCount && (!explicitEmpty || unavailable || page > 1))) {
+    const error = new Error(t("BOOTH 라이브러리 화면을 확인하지 못했어요. 기존 데이터는 유지됩니다."));
+    error.code = "LIBRARY_PARSE_FAILED";
+    throw error;
+  }
+}
+
 export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
   if (typeof DOMParser === "undefined") {
     throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
@@ -280,10 +292,11 @@ export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
 
   const documentNode = new DOMParser().parseFromString(html, "text/html");
   assertAuthenticated(documentNode);
+  const main = documentNode.querySelector("main");
 
   const seen = new Set();
   const items = [];
-  const itemAnchors = Array.from(documentNode.querySelectorAll('a[href*="/items/"]'));
+  const itemAnchors = Array.from(main?.querySelectorAll('a[href*="/items/"]') || []);
 
   for (const anchor of itemAnchors) {
     const href = anchor.getAttribute("href");
@@ -324,6 +337,14 @@ export function parseBoothLibraryPage(html, { source, page, pageUrl }) {
   const pageNumbers = Array.from(documentNode.querySelectorAll("a[href]"))
     .map((anchor) => getPageNumber(anchor.getAttribute("href"), sourceConfig.path, pageUrl))
     .filter(Boolean);
+
+  assertLibraryPage({
+    title: documentNode.querySelector("title")?.textContent,
+    hasMain: Boolean(main),
+    itemCount: items.length,
+    text: main?.textContent,
+    page,
+  });
 
   return {
     items,
@@ -467,6 +488,7 @@ export function extractProductSupportSignals(description) {
   const supported = new Set();
   const linkedProductIds = new Set();
   let inSupportSection = false;
+  let inUnsupportedSection = false;
   let previousLine = "";
 
   const addTextMatches = (value) => {
@@ -477,12 +499,13 @@ export function extractProductSupportSignals(description) {
     if (!line) continue;
     const context = `${previousLine} ${line}`.trim();
     const linkedProducts = linkedAvatarProducts(line);
-    const negative = NEGATIVE_SUPPORT_PATTERN.test(line)
-      || (linkedProducts.length > 0 && NEGATIVE_SUPPORT_PATTERN.test(previousLine));
     const supportHeading = SUPPORT_SECTION_PATTERN.test(line);
+    const negative = NEGATIVE_SUPPORT_PATTERN.test(line)
+      || (!supportHeading && linkedProducts.length > 0 && NEGATIVE_SUPPORT_PATTERN.test(previousLine));
 
     if (supportHeading) {
-      inSupportSection = true;
+      inSupportSection = !negative;
+      inUnsupportedSection = negative;
       if (!negative) {
         addTextMatches(line);
         for (const { productId, profileId } of linkedProducts) {
@@ -492,6 +515,14 @@ export function extractProductSupportSignals(description) {
       }
       previousLine = line;
       continue;
+    }
+
+    if (inUnsupportedSection) {
+      if (!OTHER_SECTION_PATTERN.test(line)) {
+        previousLine = line;
+        continue;
+      }
+      inUnsupportedSection = false;
     }
 
     if (inSupportSection && OTHER_SECTION_PATTERN.test(line)) {
@@ -586,7 +617,7 @@ function readProductDescription(documentNode, pageUrl) {
   return "";
 }
 
-export function parseBoothProductSupport(html, { productId, pageUrl }) {
+function parseProductDocument(html, { productId, pageUrl }) {
   if (!/^\d+$/.test(String(productId || ""))
     || !isAllowedProductUrl(pageUrl, productId)) {
     throw new Error(t("올바르지 않은 BOOTH 상품 페이지입니다."));
@@ -595,7 +626,10 @@ export function parseBoothProductSupport(html, { productId, pageUrl }) {
     throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
   }
 
-  const documentNode = new DOMParser().parseFromString(html, "text/html");
+  return new DOMParser().parseFromString(html, "text/html");
+}
+
+function readProductSupport(documentNode, pageUrl) {
   const description = readProductDescription(documentNode, pageUrl);
   const signals = extractProductSupportSignals(description);
   return {
@@ -604,16 +638,7 @@ export function parseBoothProductSupport(html, { productId, pageUrl }) {
   };
 }
 
-export function parseBoothProductIdentity(html, { productId, pageUrl }) {
-  if (!/^\d+$/.test(String(productId || ""))
-    || !isAllowedProductUrl(pageUrl, productId)) {
-    throw new Error(t("올바르지 않은 BOOTH 상품 페이지입니다."));
-  }
-  if (typeof DOMParser === "undefined") {
-    throw new Error(t("이 환경에서는 BOOTH 페이지를 분석할 수 없습니다."));
-  }
-
-  const documentNode = new DOMParser().parseFromString(html, "text/html");
+function readProductIdentity(documentNode) {
   const titleParts = [
     documentNode.querySelector('meta[property="og:title"]')?.getAttribute("content"),
     documentNode.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
@@ -624,6 +649,14 @@ export function parseBoothProductIdentity(html, { productId, pageUrl }) {
   return {
     profileId: profileIds.length === 1 ? profileIds[0] : null,
   };
+}
+
+export function parseBoothProductSupport(html, context) {
+  return readProductSupport(parseProductDocument(html, context), context.pageUrl);
+}
+
+export function parseBoothProductIdentity(html, context) {
+  return readProductIdentity(parseProductDocument(html, context));
 }
 
 export function getOrdersPageNumber(href, baseUrl = BOOTH_ACCOUNTS_ORIGIN) {
@@ -945,16 +978,24 @@ export async function loadBoothDownloadOptions(item) {
 async function runPool(tasks, concurrency, worker) {
   const results = new Array(tasks.length);
   let cursor = 0;
+  let failed = false;
+  let failure;
 
   async function consume() {
-    while (cursor < tasks.length) {
+    while (!failed && cursor < tasks.length) {
       const index = cursor;
       cursor += 1;
-      results[index] = await worker(tasks[index], index);
+      try {
+        results[index] = await worker(tasks[index], index);
+      } catch (error) {
+        if (!failed) failure = error;
+        failed = true;
+      }
     }
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, consume));
+  if (failed) throw failure;
   return results;
 }
 
@@ -983,23 +1024,58 @@ export async function indexBoothProductSupport(items, {
   let completed = 0;
   let scannedCount = 0;
   let failedCount = 0;
-  const linkedProductProfiles = new Map();
+  // Cache compact parsed signals for this sync only, never product HTML. Owned
+  // products and avatar links share the same request without recursive waits.
+  const productSignals = new Map();
+  const loadProductSignals = (productId) => {
+    const key = String(productId);
+    if (!productSignals.has(key)) {
+      productSignals.set(key, (async () => {
+        const pageUrl = buildProductPageUrl(key);
+        const html = await fetchWithRetry(pageUrl, 3, (url) => fetchProductHtml(url, key));
+        const documentNode = parseProductDocument(html, { productId: key, pageUrl });
+        return {
+          support: readProductSupport(documentNode, pageUrl),
+          profileId: readProductIdentity(documentNode).profileId,
+        };
+      })());
+    }
+    return productSignals.get(key);
+  };
 
   const resolveLinkedProductProfile = (productId) => {
     const knownProfileId = getAvatarProfileIdByProductId(productId);
     if (knownProfileId) return Promise.resolve(knownProfileId);
-    if (!linkedProductProfiles.has(productId)) {
-      linkedProductProfiles.set(productId, (async () => {
-        const pageUrl = buildProductPageUrl(productId);
-        const html = await fetchWithRetry(
-          pageUrl,
-          3,
-          (url) => fetchProductHtml(url, productId),
-        );
-        return parseBoothProductIdentity(html, { productId, pageUrl }).profileId;
-      })());
-    }
-    return linkedProductProfiles.get(productId);
+    return loadProductSignals(productId).then(({ profileId }) => profileId);
+  };
+
+  // Keep network workers moving while a checkpoint is written. Serialize writes
+  // and coalesce pending checkpoints so a slow disk cannot build a snapshot queue.
+  let checkpoint = Promise.resolve();
+  let checkpointRunning = false;
+  let checkpointRequested = false;
+  let checkpointFailed = false;
+  let checkpointError;
+  const requestCheckpoint = () => {
+    checkpointRequested = true;
+    if (checkpointRunning || checkpointFailed) return;
+    checkpointRunning = true;
+    checkpoint = (async () => {
+      while (checkpointRequested && !checkpointFailed) {
+        checkpointRequested = false;
+        try {
+          await onCheckpoint(nextItems.map((item) => ({ ...item })), {
+            completed,
+            total: tasks.length,
+            failedCount,
+          });
+        } catch (error) {
+          checkpointFailed = true;
+          checkpointError = error;
+        }
+      }
+      checkpointRunning = false;
+    })();
   };
 
   if (tasks.length) {
@@ -1014,20 +1090,15 @@ export async function indexBoothProductSupport(items, {
     });
   }
 
-  for (let offset = 0; offset < tasks.length; offset += PRODUCT_SUPPORT_CHECKPOINT_SIZE) {
-    const chunk = tasks.slice(offset, offset + PRODUCT_SUPPORT_CHECKPOINT_SIZE);
-    const results = await runPool(chunk, 2, async ({ item, itemIndex }) => {
+  try {
+    await runPool(tasks, SYNC_CONCURRENCY, async ({ item, itemIndex }) => {
+      if (checkpointFailed) throw checkpointError;
+      let result;
       try {
-        const pageUrl = buildProductPageUrl(item.productId);
-        const html = await fetchWithRetry(
-          pageUrl,
-          3,
-          (url) => fetchProductHtml(url, item.productId),
-        );
-        const support = parseBoothProductSupport(html, {
-          productId: item.productId,
-          pageUrl,
-        });
+        const { support } = await loadProductSignals(item.productId);
+        if (!support.descriptionFound) {
+          throw new Error(t("상품 설명을 확인하지 못했어요."));
+        }
         const supportedAvatarIds = new Set(support.supportedAvatarIds);
         let linkedProductFailed = false;
         for (const linkedProductId of support.linkedProductIds) {
@@ -1047,38 +1118,35 @@ export async function indexBoothProductSupport(items, {
           indexedItem.supportIndexedAt = new Date(now).toISOString();
           indexedItem.supportIndexVersion = PRODUCT_SUPPORT_INDEX_VERSION;
         }
-        return {
+        result = {
           itemIndex,
           item: indexedItem,
           failed: linkedProductFailed,
         };
       } catch {
-        return { itemIndex, item, failed: true };
+        result = { itemIndex, item, failed: true };
       }
-    });
-
-    for (const result of results) {
       nextItems[result.itemIndex] = result.item;
       completed += 1;
       if (result.failed) failedCount += 1;
       else scannedCount += 1;
-    }
-
-    onProgress({
-      phase: "product-support",
-      completed,
-      total: tasks.length,
-      message: t("상품 설명 {completed}/{total}개 확인 중", {
-        completed: formatLocalizedNumber(completed),
-        total: formatLocalizedNumber(tasks.length),
-      }),
+      onProgress({
+        phase: "product-support",
+        completed,
+        total: tasks.length,
+        message: t("상품 설명 {completed}/{total}개 확인 중", {
+          completed: formatLocalizedNumber(completed),
+          total: formatLocalizedNumber(tasks.length),
+        }),
+      });
+      if (completed % PRODUCT_SUPPORT_CHECKPOINT_SIZE === 0 || completed === tasks.length) {
+        requestCheckpoint();
+      }
     });
-    await onCheckpoint(nextItems.map((item) => ({ ...item })), {
-      completed,
-      total: tasks.length,
-      failedCount,
-    });
+  } finally {
+    await checkpoint;
   }
+  if (checkpointFailed) throw checkpointError;
 
   return {
     items: nextItems,
@@ -1166,7 +1234,7 @@ export async function syncBoothLibrary(onProgress = () => {}) {
   });
 
   let firstCompleted = 0;
-  const firstPages = await Promise.all(SOURCES.map(async (sourceConfig, index) => {
+  const firstPages = await runPool(SOURCES, SYNC_CONCURRENCY, async (sourceConfig) => {
     const pageUrl = `${BOOTH_ACCOUNTS_ORIGIN}${sourceConfig.path}?page=1`;
     const html = await fetchWithRetry(pageUrl);
     const parsed = parseBoothLibraryPage(html, {
@@ -1182,7 +1250,7 @@ export async function syncBoothLibrary(onProgress = () => {}) {
       message: t("{source} 목록 확인 중", { source: t(sourceConfig.label) }),
     });
     return { sourceConfig, parsed };
-  }));
+  });
 
   const tasks = [];
   for (const { sourceConfig, parsed } of firstPages) {
@@ -1199,7 +1267,7 @@ export async function syncBoothLibrary(onProgress = () => {}) {
     total,
     message: t("전체 페이지 수를 확인했어요"),
   });
-  const remainingPages = await runPool(tasks, 2, async ({ sourceConfig, page }) => {
+  const remainingPages = await runPool(tasks, SYNC_CONCURRENCY, async ({ sourceConfig, page }) => {
     const pageUrl = `${BOOTH_ACCOUNTS_ORIGIN}${sourceConfig.path}?page=${page}`;
     const html = await fetchWithRetry(pageUrl);
     const parsed = parseBoothLibraryPage(html, {

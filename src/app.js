@@ -37,15 +37,21 @@ import {
   SPENDING_SUMMARY_KEY,
   STORAGE_KEY,
   clearState,
-  createOrganizationBackup,
+  assertBackupSize,
+  decodeOrganizationBackup,
+  encodeOrganizationBackup,
+  isOwnStorageChange,
   loadPreferences,
   loadSpendingSummary,
   loadState,
   restoreOrganizationBackup,
   restrictStorageAccess,
-  savePreferences,
+  runLibraryOperation,
+  sanitizeState,
   saveSpendingSummary,
-  saveState,
+  updatePreferences,
+  updateState,
+  useMemoryStorage,
 } from "./storage.js";
 import { startBoothDownload } from "./download.js";
 import {
@@ -62,8 +68,6 @@ const PAGE_SIZE = 48;
 const CARD_CACHE_LIMIT = PAGE_SIZE * 4;
 const CARD_LAYOUT_DURATION_MS = 260;
 const IS_DEMO = new URLSearchParams(window.location.search).has("demo");
-const STATE_LOCK_NAME = "booth-shelf-state-write";
-const SPENDING_LOCK_NAME = "booth-shelf-spending-scan";
 const BOOTH_ACCOUNT_PERMISSION = "https://accounts.booth.pm/*";
 const BOOTH_PRODUCT_PERMISSION = "https://booth.pm/*";
 const CARD_FLIP_FOCUS_DELAY_MS = 360;
@@ -71,7 +75,6 @@ const DRAG_CLICK_SUPPRESSION_MS = 320;
 const POINTER_DRAG_THRESHOLD_PX = 7;
 const SORT_SWITCH_ROLL_DURATION_MS = 360;
 const DROP_SUCCESS_DURATION_MS = 760;
-const MAX_ORGANIZATION_BACKUP_BYTES = 2 * 1024 * 1024;
 const LOCALE_SEQUENCE = Object.freeze(["ko", "en", "ja"]);
 const LOCALE_NAMES = Object.freeze({
   ko: "한국어",
@@ -132,7 +135,6 @@ let loadMoreObserver;
 let themeSwitchFrame;
 let hasShownCards = false;
 let pendingOrganizationBackup = null;
-let fallbackSaveQueue = Promise.resolve();
 const downloadCardStates = new Map();
 const itemDrag = {
   itemKeys: [],
@@ -156,12 +158,12 @@ const refs = Object.fromEntries(
     "all-count", "purchased-count", "gift-count", "free-count", "favorites-count",
     "favorites-nav", "add-root-folder", "add-category", "all-folders", "unfiled-folder",
     "unfiled-count", "folder-tree", "search-input",
-    "search-field", "sync-button", "view-eyebrow", "view-title",
+    "search-field", "search-clear", "sync-button", "view-eyebrow", "view-title",
     "view-description", "last-sync", "grid-density", "sort-kind-toggle", "sort-kind-icon",
     "sort-kind-value", "sort-direction-toggle", "sort-direction-value", "sync-panel",
     "sync-message", "sync-detail", "sync-progress", "login-link",
     "result-summary", "selection-summary", "selection-count", "selection-clear",
-    "clear-filter", "item-grid", "empty-state",
+    "item-grid", "empty-state",
     "empty-title", "empty-description", "empty-sync-button",
     "empty-login-link", "load-more-sentinel", "toast", "context-menu",
     "folder-dialog", "folder-form", "folder-dialog-title",
@@ -215,8 +217,8 @@ function demoState() {
   ];
 
   const items = samples.map(([title, sellerName, source], index) => ({
-    key: `product:demo-${index + 1}`,
-    productId: `demo-${index + 1}`,
+    key: `product:${990000000001 + index}`,
+    productId: String(990000000001 + index),
     source,
     sources: index === 0 ? ["purchased", "gift"] : [source],
     title,
@@ -405,24 +407,22 @@ function updateLanguageToggle(locale = getLocale()) {
 }
 
 async function toggleTheme() {
-  const currentTheme = normalizeThemePreference(preferences?.theme);
-  const currentIndex = THEME_SEQUENCE.indexOf(currentTheme);
-  const nextTheme = THEME_SEQUENCE[(currentIndex + 1) % THEME_SEQUENCE.length];
-  preferences = { ...preferences, theme: nextTheme };
-  applyTheme(nextTheme);
   try {
-    preferences = await savePreferences(preferences);
+    preferences = await updatePreferences((latest) => {
+      const currentIndex = THEME_SEQUENCE.indexOf(normalizeThemePreference(latest.theme));
+      return { ...latest, theme: THEME_SEQUENCE[(currentIndex + 1) % THEME_SEQUENCE.length] };
+    });
+    applyTheme(preferences.theme);
   } catch (error) {
     showToast(t("테마 설정을 저장하지 못했어요: {message}", { message: error.message }), "error");
   }
 }
 
 async function changeLocale(locale) {
-  preferences = { ...preferences, locale };
-  applyLocalePreference(locale);
-  render();
   try {
-    preferences = await savePreferences(preferences);
+    preferences = await updatePreferences((latest) => ({ ...latest, locale }));
+    applyLocalePreference(preferences.locale);
+    renderPreservingViewport();
   } catch (error) {
     showToast(t("언어 설정을 저장하지 못했어요: {message}", { message: error.message }), "error");
   }
@@ -446,57 +446,10 @@ function formatSyncTime(value) {
   }) });
 }
 
-function persistState({ alreadyLocked = false } = {}) {
-  const write = async () => {
-    state = await saveState(state);
-    return state;
-  };
-  const reportFailure = (error) => {
-    showToast(t("저장하지 못했어요: {message}", { message: error.message }), "error");
-    return state;
-  };
-
-  if (alreadyLocked) return write();
-  if (navigator.locks?.request) {
-    return runWithStateLock(write, { wait: true }).catch(reportFailure);
-  }
-
-  fallbackSaveQueue = fallbackSaveQueue.then(write).catch(reportFailure);
-  return fallbackSaveQueue;
-}
-
-async function runWithStateLock(task, { wait = false } = {}) {
-  if (!navigator.locks?.request) return task();
-
-  return navigator.locks.request(
-    STATE_LOCK_NAME,
-    wait ? { mode: "exclusive" } : { mode: "exclusive", ifAvailable: true },
-    async (lock) => {
-      if (!lock) {
-        const error = new Error(t("다른 BOOTH Shelf 창에서 동기화 또는 삭제 작업이 진행 중입니다."));
-        error.code = "STATE_BUSY";
-        throw error;
-      }
-      return task();
-    },
-  );
-}
-
-async function runWithSpendingLock(task) {
-  if (!navigator.locks?.request) return task();
-
-  return navigator.locks.request(
-    SPENDING_LOCK_NAME,
-    { mode: "exclusive", ifAvailable: true },
-    async (lock) => {
-      if (!lock) {
-        const error = new Error(t("다른 BOOTH Shelf 창에서 이미 결제 금액을 계산하고 있어요."));
-        error.code = "SPENDING_BUSY";
-        throw error;
-      }
-      return task();
-    },
-  );
+async function persistState(mutate) {
+  const committed = await updateState(mutate);
+  state = committed;
+  return committed;
 }
 
 async function requestBoothAccess({ productPages = false } = {}) {
@@ -631,25 +584,27 @@ async function calculateSpending() {
       }
     }
 
-    const result = IS_DEMO
-      ? await runDemoSpending()
-      : await runWithSpendingLock(() => calculateBoothSpending((progress) => {
-        setRedPillProgress({
-          message: progress.message,
-          detail: progress.total
-            ? `${progress.completed} / ${progress.total}`
-            : t("주문 수를 확인하고 있어요."),
-          percent: progress.percent,
+    spendingSummary = await runLibraryOperation(async () => {
+      const result = IS_DEMO
+        ? await runDemoSpending()
+        : await calculateBoothSpending((progress) => {
+          setRedPillProgress({
+            message: progress.message,
+            detail: progress.total
+              ? `${progress.completed} / ${progress.total}`
+              : t("주문 수를 확인하고 있어요."),
+            percent: progress.percent,
+          });
         });
-      }));
-    spendingSummary = await saveSpendingSummary(result);
+      return saveSpendingSummary(result);
+    });
     renderSpendingSummary(spendingSummary);
     showToast(t("BOOTH 결제 금액 계산을 마쳤어요."));
   } catch (error) {
     const authError = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
     showRedPillError(authError
       ? new Error(t("같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요."))
-      : error);
+      : new Error(t(error.message)));
   } finally {
     ui.calculatingSpending = false;
     refs["red-pill-calculate"].disabled = false;
@@ -669,11 +624,28 @@ function openRedPillDialog() {
 }
 
 function closeSidebar() {
+  const wasOpen = document.body.classList.contains("sidebar-visible");
   document.body.classList.remove("sidebar-visible");
+  syncSidebarAccessibility();
+  if (wasOpen && window.matchMedia("(max-width: 980px)").matches) refs["sidebar-open"].focus();
 }
 
 function openSidebar() {
   document.body.classList.add("sidebar-visible");
+  syncSidebarAccessibility();
+  refs["sidebar-close"].focus();
+}
+
+function syncSidebarAccessibility() {
+  const compact = window.matchMedia("(max-width: 980px)").matches;
+  const open = compact && document.body.classList.contains("sidebar-visible");
+  refs.sidebar.inert = compact && !open;
+  document.getElementById("main-content").inert = open;
+  document.getElementById("global-header").inert = open;
+  refs["sidebar-open"].setAttribute("aria-expanded", String(open));
+  refs.sidebar.setAttribute("role", open ? "dialog" : "complementary");
+  if (open) refs.sidebar.setAttribute("aria-modal", "true");
+  else refs.sidebar.removeAttribute("aria-modal");
 }
 
 function openSettingsDialog() {
@@ -681,9 +653,9 @@ function openSettingsDialog() {
 }
 
 async function saveSidebarWidth(width) {
-  preferences = { ...preferences, sidebarWidth: normalizeSidebarWidth(width) };
   try {
-    preferences = await savePreferences(preferences);
+    preferences = await updatePreferences((latest) => ({ ...latest, sidebarWidth: normalizeSidebarWidth(width) }));
+    applySidebarWidth(preferences.sidebarWidth);
   } catch (error) {
     showToast(t("사이드바 너비를 저장하지 못했어요: {message}", { message: error.message }), "error");
   }
@@ -733,9 +705,8 @@ function handleSidebarResizeKeydown(event) {
 
 async function saveGridColumns(value) {
   const gridColumns = applyGridColumns(value);
-  preferences = { ...preferences, gridColumns };
   try {
-    preferences = await savePreferences(preferences);
+    preferences = await updatePreferences((latest) => ({ ...latest, gridColumns }));
   } catch (error) {
     showToast(t("카드 배열을 저장하지 못했어요: {message}", { message: error.message }), "error");
   }
@@ -831,9 +802,12 @@ function renderNavigation() {
   refs["unfiled-count"].textContent = formatCount(unfiledCount);
 
   document.querySelectorAll("[data-source]").forEach((button) => {
-    button.classList.toggle("is-active", !ui.favoritesOnly && ui.source === button.dataset.source);
+    const active = !ui.favoritesOnly && ui.source === button.dataset.source;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
   });
   refs["favorites-nav"].classList.toggle("is-active", ui.favoritesOnly);
+  refs["favorites-nav"].setAttribute("aria-pressed", String(ui.favoritesOnly));
   refs["all-folders"].classList.toggle("is-active", ui.folderId === "all");
   refs["unfiled-folder"].classList.toggle("is-active", ui.folderId === "unfiled");
   refs["unfiled-folder"].classList.toggle("is-drop-success", ui.dropSuccessFolderId === "unfiled");
@@ -871,8 +845,7 @@ function renderFolderBranch(branch, depth = 1) {
       className: `folder-row${ui.folderId === folder.id ? " is-active" : ""}${ui.selectedFolderId === folder.id ? " is-selected" : ""}${ui.dropSuccessFolderId === folder.id ? " is-drop-success" : ""}`,
       attrs: {
         type: "button",
-        role: "treeitem",
-        "aria-level": depth,
+        "aria-pressed": String(ui.folderId === folder.id),
         "data-folder-id": folder.id,
         "data-drop-folder-id": folder.id,
         title: t("{name} 폴더 · 상품 카드를 끌어 놓아 분류", { name: folder.name }),
@@ -970,7 +943,7 @@ function getDownloadCardState(itemKey) {
 }
 
 function demoDownloadOptions(item) {
-  const sampleNumber = Number.parseInt(String(item.productId).replace(/\D/g, ""), 10) || 1;
+  const sampleNumber = (Number.parseInt(String(item.productId).replace(/\D/g, ""), 10) % 1000) || 1;
   const optionCount = sampleNumber === 1 ? 10 : (sampleNumber % 3) + 1;
   return Array.from({ length: optionCount }, (_, index) => ({
     id: `demo-${sampleNumber}-${index + 1}`,
@@ -1057,16 +1030,15 @@ function createDownloadBack(item, downloadState) {
         count: formatCount(downloadState.options.length),
       }),
     }));
-    const list = element("div", {
+    const list = element("ul", {
       className: "download-option-list",
-      attrs: { role: "list", "aria-label": t("다운로드할 파일") },
+      attrs: { "aria-label": t("다운로드할 파일") },
     });
     downloadState.options.forEach((option, optionIndex) => {
       const button = element("button", {
         className: "download-option",
         attrs: {
           type: "button",
-          role: "listitem",
           "data-download-key": item.key,
           "data-download-option-index": optionIndex,
           "aria-label": t("{file} 다운로드", {
@@ -1084,7 +1056,9 @@ function createDownloadBack(item, downloadState) {
         copy,
         lucideIcon("download", "download-option-arrow"),
       );
-      list.append(button);
+      const listItem = element("li", { className: "download-option-item" });
+      listItem.append(button);
+      list.append(listItem);
     });
     body.append(list);
   } else {
@@ -1136,8 +1110,8 @@ function updateCardSearchMatch(card, item) {
     currentMatch.remove();
     return;
   }
-  const revealButton = card.querySelector(".download-reveal-button");
-  if (nextMatch && revealButton) revealButton.before(nextMatch);
+  const contentFooter = card.querySelector(".folder-chip-list, .item-actions");
+  if (nextMatch && contentFooter) contentFooter.before(nextMatch);
 }
 
 function createCard(item, index) {
@@ -1149,7 +1123,6 @@ function createCard(item, index) {
       "data-item-key": item.key,
       draggable: "false",
       "aria-grabbed": "false",
-      "aria-selected": String(isSelected),
       title: downloadState.flipped ? null : t("카드 이미지·여백을 클릭해 선택 또는 해제 · 선택한 카드를 폴더로 끌어 놓아 정리"),
     },
   });
@@ -1179,22 +1152,18 @@ function createCard(item, index) {
     visual.append(element("span", { className: "placeholder-letter", text: initial, attrs: { "aria-hidden": "true" } }));
   }
 
-  const isPurchased = itemHasSource(item, "purchased");
   const isGift = itemHasSource(item, "gift");
   const isFree = itemHasSource(item, "free");
   const assignedFolderIds = getItemFolderIds(state.assignments, item.key);
-  const sourceLabels = [
-    isPurchased ? t("구매") : "",
-    isGift ? t("선물") : "",
-    isFree ? t("무료") : "",
-  ].filter(Boolean);
-  const sourceClass = sourceLabels.length > 1
-    ? "mixed"
-    : isGift ? "gift" : isFree ? "free" : "purchased";
-  const sourceBadge = element("span", {
-    className: `source-badge source-${sourceClass}`,
-    text: sourceLabels.join(" + "),
-  });
+  if (isGift) {
+    visual.append(element("span", {
+      className: "gift-ribbon-corner",
+      attrs: {
+        role: "img",
+        "aria-label": t("선물"),
+      },
+    }));
+  }
   const selectionBadge = element("span", {
     className: "item-selection-badge",
     text: t("선택됨"),
@@ -1202,8 +1171,26 @@ function createCard(item, index) {
   });
   const visualControls = element("div", { className: "item-visual-controls" });
   visualControls.append(selectionBadge);
+  const selectButton = element("button", {
+    className: "item-select-button",
+    attrs: {
+      type: "button",
+      "data-select-key": item.key,
+      "aria-pressed": String(isSelected),
+      "aria-label": t("상품 선택: {title}", { title: item.title }),
+      title: t("상품 선택: {title}", { title: item.title }),
+    },
+  });
+  selectButton.append(element("span", { className: "selection-check", attrs: { "aria-hidden": "true" } }));
+  visualControls.append(selectButton);
   const visualHeader = element("div", { className: "item-visual-header" });
-  visualHeader.append(sourceBadge, visualControls);
+  if (isFree && !isGift) {
+    visualHeader.append(element("span", {
+      className: "source-badge source-free",
+      text: t("무료"),
+    }));
+  }
+  visualHeader.append(visualControls);
   visual.append(visualHeader);
 
   const content = element("div", { className: "item-content" });
@@ -1250,12 +1237,10 @@ function createCard(item, index) {
   revealButton.append(
     lucideIcon("download", "download-reveal-icon"),
     element("span", { text: t("다운로드하기") }),
-    lucideIcon("chevron-right", "download-reveal-arrow"),
   );
   content.append(seller, title);
   const downloadMatch = createDownloadSearchMatch(item);
   if (downloadMatch) content.append(downloadMatch);
-  content.append(revealButton);
 
   const assignedFolderPaths = assignedFolderIds
     .map((folderId) => getFolderDisplayPath(folderId))
@@ -1271,7 +1256,7 @@ function createCard(item, index) {
       const label = path.join(" / ");
       chipList.append(element("span", {
         className: "folder-chip",
-        text: label,
+        text: path.at(-1),
         attrs: { title: label },
       }));
     }
@@ -1290,9 +1275,17 @@ function createCard(item, index) {
   const actions = element("div", { className: "item-actions" });
   const assignButton = element("button", {
     className: "organize-button",
-    text: t(assignedFolderIds.length ? "폴더 관리" : "폴더에 넣기"),
-    attrs: { type: "button", "data-assign-key": item.key },
+    attrs: {
+      type: "button",
+      "data-assign-key": item.key,
+      title: t(assignedFolderIds.length ? "폴더 관리" : "폴더에 넣기"),
+      "aria-label": t(assignedFolderIds.length ? "폴더 관리" : "폴더에 넣기"),
+    },
   });
+  assignButton.append(
+    lucideIcon("folder-input"),
+    element("span", { text: t(assignedFolderIds.length ? "폴더 관리" : "폴더에 넣기") }),
+  );
   const isFavorite = state.favorites.includes(item.key);
   const favoriteButton = element("button", {
     className: `favorite-button${isFavorite ? " is-favorite" : ""}`,
@@ -1304,7 +1297,8 @@ function createCard(item, index) {
     },
   });
   favoriteButton.append(lucideIcon("star"));
-  actions.append(assignButton, favoriteButton);
+  visualControls.append(favoriteButton);
+  actions.append(revealButton, assignButton);
   content.append(actions);
   front.append(visual, content);
   inner.append(front, createDownloadBack(item, downloadState));
@@ -1328,9 +1322,7 @@ function syncSelectionUI() {
     if (card.classList.contains("is-multi-selected") !== selected) {
       card.classList.toggle("is-multi-selected", selected);
     }
-    if (card.getAttribute("aria-selected") !== String(selected)) {
-      card.setAttribute("aria-selected", String(selected));
-    }
+    card.querySelector("[data-select-key]")?.setAttribute("aria-pressed", String(selected));
     if (selected) selectedCards.push(card);
   }
 
@@ -1748,10 +1740,11 @@ async function revealDownloadOptions(itemKey, trigger) {
     downloadState.status = "ready";
     downloadState.options = options;
     if (!IS_DEMO) {
-      const nextItems = setItemDownloadFiles(state.items, itemKey, options);
-      if (nextItems !== state.items) {
-        state = { ...state, items: nextItems };
-        await persistState();
+      if (setItemDownloadFiles(state.items, itemKey, options) !== state.items) {
+        await persistState((latest) => ({
+          ...latest,
+          items: setItemDownloadFiles(latest.items, itemKey, options),
+        }));
       }
     }
   } catch (error) {
@@ -1816,16 +1809,6 @@ function currentResults() {
     name: ui.sortKind === "name" ? ui.sortDirection : "off",
   };
   return sortItems(filtered, sort, [ui.sortKind]);
-}
-
-function hasActiveFilter() {
-  return Boolean(ui.query)
-    || ui.searchField !== "all"
-    || ui.source !== "all"
-    || ui.folderId !== "all"
-    || ui.favoritesOnly
-    || ui.sortKind !== "purchase"
-    || ui.sortDirection !== "asc";
 }
 
 function prefersReducedMotion() {
@@ -1958,7 +1941,6 @@ function renderItems({ reconcile = false, animateLayout = false } = {}) {
     element("strong", { text: formatCount(results.length) }),
     document.createTextNode(t("개의 상품")),
   );
-  refs["clear-filter"].hidden = !hasActiveFilter();
   refs["load-more-sentinel"].hidden = results.length <= visible.length;
 
   refs["empty-state"].hidden = !(noStoredItems || noResults);
@@ -2056,6 +2038,7 @@ function renderHeader({ animateSortSwitch = null } = {}) {
     t("정렬 방향 변경: 현재 {value}", { value: directionLabel }),
   );
   refs["search-field"].value = ui.searchField;
+  refs["search-clear"].hidden = !ui.query;
   if (refs["search-input"].value !== ui.query) refs["search-input"].value = ui.query;
 }
 
@@ -2144,6 +2127,26 @@ function bindInfiniteScroll() {
   }, { passive: true });
 }
 
+function preparePressFeedback(event) {
+  if (event.type === "keydown" && (event.repeat || !["Enter", " "].includes(event.key))) return;
+  if (event.type === "pointerdown" && event.button !== 0) return;
+  if (!(event.target instanceof Element) || prefersReducedMotion()) return;
+  const button = event.target.closest("button, a.header-icon-button");
+  if (!button || button.disabled || button.matches(".nav-row, .folder-row, .folder-category-row")) return;
+  const basis = Math.max(button.offsetHeight, button.offsetWidth / 4, 24);
+  button.style.setProperty("--pressed-scale", String((basis - 2) / basis));
+}
+
+function animateLibraryHeading() {
+  const heading = refs["view-title"].parentElement;
+  if (prefersReducedMotion() || typeof heading?.animate !== "function") return;
+  heading.getAnimations().forEach((animation) => animation.cancel());
+  heading.animate(
+    [{ opacity: 0.6, transform: "translateY(6px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 250, easing: "cubic-bezier(0, 0, 0.15, 1)" },
+  );
+}
+
 function setSource(source) {
   selectedItemKeys.clear();
   ui.source = source;
@@ -2153,7 +2156,8 @@ function setSource(source) {
   ui.selectedCategoryId = null;
   resetResultWindow();
   closeSidebar();
-  render();
+  render({ reconcileItems: true, animateItems: true });
+  animateLibraryHeading();
 }
 
 function selectFolder(folderId) {
@@ -2164,10 +2168,11 @@ function selectFolder(folderId) {
   ui.favoritesOnly = false;
   resetResultWindow();
   closeSidebar();
-  render();
+  render({ reconcileItems: true, animateItems: true });
+  animateLibraryHeading();
 }
 
-function clearFilters() {
+function resetLibraryView() {
   selectedItemKeys.clear();
   Object.assign(ui, {
     source: "all",
@@ -2209,10 +2214,8 @@ function setSyncPanel({ message, detail = "", percent = 0, tone = "default", log
   refs["login-link"].hidden = !login;
 }
 
-function mergeSyncedItems(items, syncedAt) {
-  downloadCardStates.clear();
-  selectedItemKeys.clear();
-  const previousItems = new Map(state.items.map((item) => [item.key, item]));
+function mergeSyncedItems(previousState, items, syncedAt) {
+  const previousItems = new Map(previousState.items.map((item) => [item.key, item]));
   const mergedItems = items.map((item) => {
     const previous = previousItems.get(item.key);
     if (!previous?.supportIndexedAt) return item;
@@ -2224,20 +2227,34 @@ function mergeSyncedItems(items, syncedAt) {
     };
   });
   const keys = new Set(mergedItems.map((item) => item.key));
-  state = {
-    ...state,
+  return {
+    ...previousState,
     items: mergedItems,
     lastSyncedAt: syncedAt,
-    favorites: state.favorites.filter((key) => keys.has(key)),
+    favorites: previousState.favorites.filter((key) => keys.has(key)),
     assignments: Object.fromEntries(
-      Object.keys(state.assignments).map((key) => [
+      Object.keys(previousState.assignments).map((key) => [
         key,
-        getItemFolderIds(state.assignments, key).filter(
-          (folderId) => state.folders.some((folder) => folder.id === folderId),
+        getItemFolderIds(previousState.assignments, key).filter(
+          (folderId) => previousState.folders.some((folder) => folder.id === folderId),
         ),
       ]).filter(([key, folderIds]) => keys.has(key) && folderIds.length),
     ),
   };
+}
+
+function mergeSupportIndex(currentItems, indexedItems) {
+  const indexedByKey = new Map(indexedItems.map((item) => [item.key, item]));
+  return currentItems.map((item) => {
+    const indexed = indexedByKey.get(item.key);
+    if (!indexed) return item;
+    return {
+      ...item,
+      supportedAvatarIds: indexed.supportedAvatarIds,
+      supportIndexedAt: indexed.supportIndexedAt,
+      supportIndexVersion: indexed.supportIndexVersion,
+    };
+  });
 }
 
 async function runDemoSync() {
@@ -2283,7 +2300,7 @@ async function syncLibrary() {
       }
     }
 
-    await runWithStateLock(async () => {
+    await runLibraryOperation(async () => {
       if (IS_DEMO) {
         await runDemoSync();
         showToast(t("미리보기 동기화를 완료했어요."));
@@ -2298,8 +2315,10 @@ async function syncLibrary() {
           percent,
         });
       });
-      mergeSyncedItems(result.items, result.syncedAt);
-      await persistState({ alreadyLocked: true });
+      await persistState((latest) => mergeSyncedItems(latest, result.items, result.syncedAt));
+      downloadCardStates.clear();
+      selectedItemKeys.clear();
+      renderPreservingViewport();
 
       const supportResult = await indexBoothProductSupport(state.items, {
         onProgress: ({ message, completed, total }) => {
@@ -2311,12 +2330,10 @@ async function syncLibrary() {
           });
         },
         onCheckpoint: async (items) => {
-          state = { ...state, items };
-          await persistState({ alreadyLocked: true });
+          await persistState((latest) => ({ ...latest, items: mergeSupportIndex(latest.items, items) }));
         },
       });
-      state = { ...state, items: supportResult.items };
-      await persistState({ alreadyLocked: true });
+      // The indexer waits for its final checkpoint; the same snapshot is already saved.
       resetResultWindow();
       render();
       const supportRetryDetail = supportResult.failedCount
@@ -2392,8 +2409,7 @@ function exportOrganizationData() {
   if (organizationDataActionBlocked()) return;
 
   try {
-    const backup = createOrganizationBackup(state);
-    const blob = new Blob([`${JSON.stringify(backup, null, 2)}\n`], {
+    const blob = new Blob([encodeOrganizationBackup(state)], {
       type: "application/json;charset=utf-8",
     });
     const now = new Date();
@@ -2416,7 +2432,7 @@ function exportOrganizationData() {
     showToast(t("정리 데이터 백업 파일을 저장했어요."));
   } catch (error) {
     showToast(t("정리 데이터 백업을 만들지 못했어요: {message}", {
-      message: error?.message || t("알 수 없는 오류"),
+      message: t(error?.message || "알 수 없는 오류"),
     }), "error");
   }
 }
@@ -2433,11 +2449,8 @@ async function prepareOrganizationRestore(event) {
   if (!file) return;
 
   try {
-    if (file.size > MAX_ORGANIZATION_BACKUP_BYTES) {
-      throw new Error(t("백업 파일은 2MB 이하여야 합니다."));
-    }
-    const content = (await file.text()).replace(/^\uFEFF/u, "");
-    const backup = JSON.parse(content);
+    assertBackupSize(file.size);
+    const backup = decodeOrganizationBackup(await file.text());
     const preview = restoreOrganizationBackup(state, backup);
     pendingOrganizationBackup = backup;
     const summary = t("{categories}개 카테고리, {folders}개 폴더, {assignments}개 상품 배치, {favorites}개 즐겨찾기를 복원합니다.", {
@@ -2474,12 +2487,7 @@ async function confirmOrganizationRestore(event) {
   submitButton.disabled = true;
 
   try {
-    await fallbackSaveQueue;
-    await runWithStateLock(async () => {
-      const latestState = await loadState();
-      const restored = restoreOrganizationBackup(latestState, backup);
-      state = await saveState(restored.state);
-    });
+    await runLibraryOperation(() => persistState((latest) => restoreOrganizationBackup(latest, backup).state));
     pendingOrganizationBackup = null;
     selectedItemKeys.clear();
     ui.folderId = "all";
@@ -2504,10 +2512,9 @@ async function confirmDataDelete(event) {
   submitButton.disabled = true;
 
   try {
-    await fallbackSaveQueue;
-    await runWithStateLock(async () => {
+    await runLibraryOperation(async () => {
       state = await clearState();
-      await removeBoothAccess();
+      if (!IS_DEMO) await removeBoothAccess();
     });
     preferences = await loadPreferences();
     spendingSummary = await loadSpendingSummary();
@@ -2516,7 +2523,7 @@ async function confirmDataDelete(event) {
     downloadCardStates.clear();
     refs["data-delete-dialog"].close();
     setSyncPanel({ hidden: true });
-    clearFilters();
+    resetLibraryView();
     showToast(t("이 기기에 저장된 BOOTH Shelf 데이터를 모두 삭제했어요."));
   } catch (error) {
     showToast(error?.code === "STATE_BUSY"
@@ -2630,46 +2637,35 @@ function openFolderDialog(mode, { folderId = null, categoryId = null } = {}) {
 
 async function submitFolderForm(event) {
   event.preventDefault();
-  const selected = state.folders.find((folder) => folder.id === ui.folderDialogFolderId) ?? null;
   const mode = ui.folderDialogMode;
+  const folderId = ui.folderDialogFolderId;
+  const categoryId = ui.folderDialogCategoryId;
+  const name = refs["folder-name-input"].value;
+  const description = refs["folder-description-input"].value;
+  const location = parseFolderLocation(refs["folder-parent-select"].value);
+  refs["folder-submit"].disabled = true;
 
   try {
-    if (mode === "add-root") {
-      const location = parseFolderLocation(refs["folder-parent-select"].value);
-      state.folders = createFolder(state.folders, {
-        name: refs["folder-name-input"].value,
-        description: refs["folder-description-input"].value,
-        categoryId: location.categoryId,
-      });
-    } else if (mode === "add-child") {
-      state.folders = createFolder(state.folders, {
-        name: refs["folder-name-input"].value,
-        description: refs["folder-description-input"].value,
-        parentId: selected.id,
-      });
-    } else if (mode === "rename") {
-      state.folders = renameFolder(
-        state.folders,
-        selected.id,
-        refs["folder-name-input"].value,
-        refs["folder-description-input"].value,
-      );
-    } else if (mode === "move") {
-      const location = parseFolderLocation(refs["folder-parent-select"].value);
-      state.folders = moveFolder(state.folders, selected.id, location.parentId, location.categoryId);
-    } else if (mode === "add-category") {
-      state.categories = createCategory(state.categories, { name: refs["folder-name-input"].value });
-    } else if (mode === "rename-category") {
-      state.categories = renameCategory(
-        state.categories,
-        ui.folderDialogCategoryId,
-        refs["folder-name-input"].value,
-      );
-    }
-
-    await persistState();
+    await persistState((latest) => {
+      let folders = latest.folders;
+      let categories = latest.categories;
+      if (mode === "add-root") {
+        folders = createFolder(folders, { name, description, categoryId: location.categoryId });
+      } else if (mode === "add-child") {
+        folders = createFolder(folders, { name, description, parentId: folderId });
+      } else if (mode === "rename") {
+        folders = renameFolder(folders, folderId, name, description);
+      } else if (mode === "move") {
+        folders = moveFolder(folders, folderId, location.parentId, location.categoryId);
+      } else if (mode === "add-category") {
+        categories = createCategory(categories, { name });
+      } else if (mode === "rename-category") {
+        categories = renameCategory(categories, categoryId, name);
+      }
+      return { ...latest, folders, categories };
+    });
     refs["folder-dialog"].close();
-    render();
+    renderPreservingViewport();
     showToast(t(
       mode === "move"
         ? "폴더를 이동했어요."
@@ -2679,6 +2675,8 @@ async function submitFolderForm(event) {
     ));
   } catch (error) {
     refs["folder-form-error"].textContent = t(error.message);
+  } finally {
+    refs["folder-submit"].disabled = false;
   }
 }
 
@@ -2731,27 +2729,28 @@ async function updateItemsFolderAssignment(
 ) {
   const uniqueKeys = [...new Set(itemKeys)];
   const normalizedFolderId = folderId || null;
-  const folderPath = normalizedFolderId ? getFolderPath(state.folders, normalizedFolderId) : [];
-  const folderLabel = normalizedFolderId
-    ? folderPath.map((folder) => folder.name).join(" / ")
-    : t("미분류");
-  const changedCount = uniqueKeys.filter(
-    (itemKey) => {
-      const assignedFolderIds = getItemFolderIds(state.assignments, itemKey);
+  let folderLabel;
+  let changedCount = 0;
+  await persistState((latest) => {
+    folderLabel = normalizedFolderId
+      ? getFolderPath(latest.folders, normalizedFolderId).map((folder) => folder.name).join(" / ")
+      : t("미분류");
+    changedCount = uniqueKeys.filter((itemKey) => {
+      const assignedFolderIds = getItemFolderIds(latest.assignments, itemKey);
       return normalizedFolderId
         ? !assignedFolderIds.includes(normalizedFolderId)
         : assignedFolderIds.length > 0;
-    },
-  ).length;
+    }).length;
 
-  state.assignments = setItemsFolderAssignment(
-    state.items,
-    state.folders,
-    state.assignments,
-    uniqueKeys,
-    normalizedFolderId,
-  );
-  await persistState();
+    const assignments = setItemsFolderAssignment(
+      latest.items,
+      latest.folders,
+      latest.assignments,
+      uniqueKeys,
+      normalizedFolderId,
+    );
+    return { ...latest, assignments };
+  });
   if (fromDrop) markFolderDropSuccess(normalizedFolderId);
   if (clearSelection) selectedItemKeys.clear();
   renderPreservingViewport();
@@ -2771,27 +2770,22 @@ async function updateItemsFolderAssignment(
 }
 
 async function updateItemFolderAssignments(itemKey, folderIds) {
-  const item = findItem(itemKey);
-  if (!item) throw new Error(t("상품을 찾을 수 없어요."));
-
   const nextFolderIds = [...new Set(Array.isArray(folderIds) ? folderIds : [])];
-  const previousFolderIds = getItemFolderIds(state.assignments, itemKey);
-  const unchanged = previousFolderIds.length === nextFolderIds.length
-    && previousFolderIds.every((folderId) => nextFolderIds.includes(folderId));
+  let unchanged;
+  await persistState((latest) => {
+    const previousFolderIds = getItemFolderIds(latest.assignments, itemKey);
+    unchanged = previousFolderIds.length === nextFolderIds.length
+      && previousFolderIds.every((folderId) => nextFolderIds.includes(folderId));
+    return {
+      ...latest,
+      assignments: setItemFolderAssignments(latest.items, latest.folders, latest.assignments, itemKey, nextFolderIds),
+    };
+  });
+  renderPreservingViewport();
   if (unchanged) {
     showToast(t("폴더 배치가 바뀌지 않았어요."));
     return false;
   }
-
-  state.assignments = setItemFolderAssignments(
-    state.items,
-    state.folders,
-    state.assignments,
-    itemKey,
-    nextFolderIds,
-  );
-  await persistState();
-  renderPreservingViewport();
   showToast(nextFolderIds.length
     ? t("상품을 {count}개 폴더에 분류했어요.", { count: formatCount(nextFolderIds.length) })
     : t("상품을 미분류로 옮겼어요."));
@@ -2858,53 +2852,57 @@ function openCategoryDeleteConfirmation(categoryId = ui.selectedCategoryId) {
 
 async function confirmDelete(event) {
   event.preventDefault();
-  if (ui.confirmDeleteType === "category") {
-    const selectedCategory = getSelectedCategory();
-    if (!selectedCategory) return;
-    const result = deleteCategoryAndReleaseFolders(
-      state.categories,
-      state.folders,
-      selectedCategory.id,
-    );
-    state.categories = result.categories;
-    state.folders = result.folders;
+  try {
+    if (ui.confirmDeleteType === "category") {
+      const selectedCategory = getSelectedCategory();
+      if (!selectedCategory) return;
+      const categoryId = selectedCategory.id;
+      await persistState((latest) => ({
+        ...latest,
+        ...deleteCategoryAndReleaseFolders(latest.categories, latest.folders, categoryId),
+      }));
+      ui.selectedCategoryId = null;
+      refs["confirm-dialog"].close();
+      render();
+      showToast(t("카테고리를 삭제했어요."));
+      return;
+    }
+
+    const folderId = ui.confirmDeleteFolderId;
+    let parentId;
+    await persistState((latest) => {
+      const selected = latest.folders.find((folder) => folder.id === folderId);
+      if (!selected) throw new Error(t("폴더를 찾을 수 없어요."));
+      parentId = selected.parentId ?? "all";
+      return { ...latest, ...deleteFolderAndPromote(latest.folders, latest.assignments, folderId) };
+    });
+    ui.folderId = parentId;
+    ui.selectedFolderId = parentId === "all" ? null : parentId;
     ui.selectedCategoryId = null;
-    await persistState();
     refs["confirm-dialog"].close();
     render();
-    showToast(t("카테고리를 삭제했어요."));
-    return;
+    showToast(t("폴더를 삭제했어요."));
+  } catch (error) {
+    showToast(t("저장하지 못했어요: {message}", { message: t(error.message) }), "error");
   }
-
-  const selected = state.folders.find((folder) => folder.id === ui.confirmDeleteFolderId) ?? null;
-  if (!selected) return;
-  const parentId = selected.parentId ?? "all";
-  const result = deleteFolderAndPromote(state.folders, state.assignments, selected.id);
-  state.folders = result.folders;
-  state.assignments = result.assignments;
-  ui.folderId = parentId;
-  ui.selectedFolderId = parentId === "all" ? null : parentId;
-  ui.selectedCategoryId = null;
-  await persistState();
-  refs["confirm-dialog"].close();
-  render();
-  showToast(t("폴더를 삭제했어요."));
 }
 
 async function toggleFolderCategory(categoryId) {
-  state.categories = toggleCategoryCollapsed(state.categories, categoryId);
-  await persistState();
+  await persistState((latest) => ({
+    ...latest,
+    categories: toggleCategoryCollapsed(latest.categories, categoryId),
+  }));
   renderFolders();
 }
 
 async function toggleFavorite(itemKey) {
-  if (state.favorites.includes(itemKey)) {
-    state.favorites = state.favorites.filter((key) => key !== itemKey);
-  } else {
-    state.favorites = [...state.favorites, itemKey];
-  }
-  await persistState();
-  render();
+  await persistState((latest) => ({
+    ...latest,
+    favorites: latest.favorites.includes(itemKey)
+      ? latest.favorites.filter((key) => key !== itemKey)
+      : [...latest.favorites, itemKey],
+  }));
+  renderPreservingViewport();
 }
 
 function closeContextMenu({ immediate = false, restoreFocus = false } = {}) {
@@ -3157,6 +3155,8 @@ function handleContextMenuKeydown(event) {
 }
 
 function bindEvents() {
+  document.addEventListener("pointerdown", preparePressFeedback);
+  document.addEventListener("keydown", preparePressFeedback);
   document.addEventListener("contextmenu", handleContextMenu);
   document.addEventListener("pointerdown", (event) => {
     if (!(event.target instanceof Element) || !event.target.closest("#context-menu")) {
@@ -3178,6 +3178,7 @@ function bindEvents() {
   refs["sidebar-open"].addEventListener("click", openSidebar);
   refs["sidebar-close"].addEventListener("click", closeSidebar);
   refs["sidebar-backdrop"].addEventListener("click", closeSidebar);
+  window.matchMedia("(max-width: 980px)").addEventListener("change", syncSidebarAccessibility);
   refs["sidebar-resizer"].addEventListener("pointerdown", beginSidebarResize);
   refs["sidebar-resizer"].addEventListener("keydown", handleSidebarResizeKeydown);
   document.addEventListener("pointermove", updateSidebarResize, { passive: false });
@@ -3202,7 +3203,8 @@ function bindEvents() {
     ui.selectedCategoryId = null;
     resetResultWindow();
     closeSidebar();
-    render();
+    render({ reconcileItems: true, animateItems: true });
+    animateLibraryHeading();
   });
 
   refs["all-folders"].addEventListener("click", () => selectFolder("all"));
@@ -3233,8 +3235,17 @@ function bindEvents() {
 
   refs["search-input"].addEventListener("input", (event) => {
     ui.query = event.target.value;
+    refs["search-clear"].hidden = !ui.query;
     resetResultWindow();
     scheduleResultRender();
+  });
+  refs["search-clear"].addEventListener("click", () => {
+    ui.query = "";
+    refs["search-input"].value = "";
+    refs["search-clear"].hidden = true;
+    resetResultWindow();
+    scheduleResultRender();
+    refs["search-input"].focus();
   });
   refs["search-field"].addEventListener("change", (event) => {
     ui.searchField = event.target.value;
@@ -3245,7 +3256,6 @@ function bindEvents() {
   refs["sort-direction-toggle"].addEventListener("click", toggleSortDirection);
   refs["sync-button"].addEventListener("click", syncLibrary);
   refs["empty-sync-button"].addEventListener("click", syncLibrary);
-  refs["clear-filter"].addEventListener("click", clearFilters);
   refs["selection-clear"].addEventListener("click", clearItemSelection);
   refs["item-grid"].addEventListener("click", (event) => {
     if (Date.now() < itemDrag.suppressClickUntil) {
@@ -3254,6 +3264,11 @@ function bindEvents() {
       return;
     }
     const card = event.target.closest(".item-card[data-item-key]");
+    const selectButton = event.target.closest("[data-select-key]");
+    if (selectButton) {
+      toggleItemSelection(selectButton.dataset.selectKey);
+      return;
+    }
     const downloadOption = event.target.closest("[data-download-option-index]");
     if (downloadOption) {
       startDownload(downloadOption);
@@ -3276,7 +3291,9 @@ function bindEvents() {
     }
     const favoriteButton = event.target.closest("[data-favorite-key]");
     if (favoriteButton) {
-      toggleFavorite(favoriteButton.dataset.favoriteKey);
+      void toggleFavorite(favoriteButton.dataset.favoriteKey).catch((error) => {
+        showToast(t("저장하지 못했어요: {message}", { message: error.message }), "error");
+      });
       return;
     }
     const assignButton = event.target.closest("[data-assign-key]");
@@ -3303,6 +3320,28 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
+    const drawerOpen = window.matchMedia("(max-width: 980px)").matches
+      && document.body.classList.contains("sidebar-visible")
+      && !document.querySelector("dialog[open]")
+      && refs["context-menu"].hidden;
+    if (drawerOpen && event.key === "Escape") {
+      event.preventDefault();
+      closeSidebar();
+      return;
+    }
+    if (drawerOpen && event.key === "Tab") {
+      const controls = [...refs.sidebar.querySelectorAll('button, a[href], [tabindex="0"]')]
+        .filter((control) => !control.disabled && !control.closest("[inert]") && control.getClientRects().length);
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
     const target = event.target;
     const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
     if (event.key === "/" && !isTyping) {
@@ -3325,28 +3364,43 @@ function bindStorageChanges() {
   chrome.storage.onChanged.addListener(async (changes, areaName) => {
     if (areaName !== "local") return;
     try {
-      if (Object.hasOwn(changes, STORAGE_KEY)) {
+      if (Object.hasOwn(changes, STORAGE_KEY) && !isOwnStorageChange(changes[STORAGE_KEY].newValue)) {
         const viewportPosition = captureViewportPosition();
-        state = await loadState();
-        downloadCardStates.clear();
-        selectedItemKeys.clear();
+        state = sanitizeState(changes[STORAGE_KEY].newValue);
+        const keys = new Set(state.items.map((item) => item.key));
+        for (const key of downloadCardStates.keys()) {
+          if (!keys.has(key)) downloadCardStates.delete(key);
+        }
+        pruneItemSelection(keys);
+        if (ui.folderId !== "all" && ui.folderId !== "unfiled"
+          && !state.folders.some((folder) => folder.id === ui.folderId)) {
+          ui.folderId = "all";
+          ui.selectedFolderId = null;
+        }
         // Keep the already loaded result window so storage writes cannot collapse the page height.
         ui.visibleLimit = Math.max(viewportPosition.visibleLimit || PAGE_SIZE, PAGE_SIZE);
         render();
         restoreViewportPosition(viewportPosition);
         window.requestAnimationFrame?.(() => restoreViewportPosition(viewportPosition));
       }
-      if (Object.hasOwn(changes, PREFERENCES_KEY)) {
+      if (Object.hasOwn(changes, PREFERENCES_KEY) && !isOwnStorageChange(changes[PREFERENCES_KEY].newValue)) {
         const previousLocale = preferences?.locale;
         preferences = await loadPreferences();
         applyLocalePreference(preferences.locale);
         applyLayoutPreferences();
         if (preferences.locale !== previousLocale) renderPreservingViewport();
       }
-      if (Object.hasOwn(changes, SPENDING_SUMMARY_KEY)) {
+      if (Object.hasOwn(changes, SPENDING_SUMMARY_KEY) && !isOwnStorageChange(changes[SPENDING_SUMMARY_KEY].newValue)) {
         spendingSummary = await loadSpendingSummary();
         if (spendingSummary && refs["red-pill-dialog"].open) {
           renderSpendingSummary(spendingSummary);
+        } else if (!spendingSummary) {
+          refs["red-pill-result"].hidden = true;
+          refs["red-pill-intro"].hidden = false;
+          for (const id of ["red-pill-total", "red-pill-other-currencies", "red-pill-order-count",
+            "red-pill-average", "red-pill-free-count", "red-pill-verdict", "red-pill-calculated-at"]) {
+            refs[id].textContent = "";
+          }
         }
       }
     } catch (error) {
@@ -3359,7 +3413,8 @@ function bindStorageChanges() {
 
 async function init() {
   if (IS_DEMO) {
-    state = demoState();
+    state = sanitizeState(demoState());
+    useMemoryStorage(state);
     preferences = await loadPreferences();
     spendingSummary = null;
   } else {
@@ -3373,6 +3428,7 @@ async function init() {
   applyLocalePreference(preferences.locale);
   applyLayoutPreferences();
   bindEvents();
+  syncSidebarAccessibility();
   bindInfiniteScroll();
   bindStorageChanges();
   render();
