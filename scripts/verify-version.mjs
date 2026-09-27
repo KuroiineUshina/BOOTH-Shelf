@@ -7,23 +7,27 @@ if (tag && !/^v\d+\.\d+\.\d+$/.test(tag)) {
   process.exit(1);
 }
 
-const [manifestText, packageText] = await Promise.all([
+const [manifestText, packageText, dashboardText] = await Promise.all([
   readFile(new URL("../manifest.json", import.meta.url), "utf8"),
   readFile(new URL("../package.json", import.meta.url), "utf8"),
+  readFile(new URL("../dashboard.html", import.meta.url), "utf8"),
 ]);
 
 const manifest = JSON.parse(manifestText);
 const packageJson = JSON.parse(packageText);
+const serviceVersion = dashboardText.match(/<p[^>]*id="service-version"[^>]*>[\s\S]*?<\/p>/)?.[0] ?? "";
 const expectedVersion = tag ? tag.slice(1) : manifest.version;
 const versions = {
   manifest: manifest.version,
   manifestVersionName: manifest.version_name,
   package: packageJson.version,
+  dashboardLabel: serviceVersion.match(/aria-label="버전 ([^"]+)"/)?.[1],
+  dashboardText: serviceVersion.match(/<strong>([^<]+)<\/strong>/)?.[1],
 };
 
 for (const [source, version] of Object.entries(versions)) {
   if (version !== expectedVersion) {
-    console.error(`${source} version ${version} does not match tag ${tag}.`);
+    console.error(`${source} version ${version} does not match ${tag ? `tag ${tag}` : `manifest version ${expectedVersion}`}.`);
     process.exit(1);
   }
 }

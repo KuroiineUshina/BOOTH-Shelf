@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 import {
   clearState,
@@ -404,4 +405,41 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
     freeOrderCount: 0,
     scannedAt: "2026-07-19T00:00:00.000Z",
   }), null);
+});
+
+test("대형 라이브러리 상태는 기본 10MB 저장 한도를 넘으므로 unlimitedStorage를 선언한다", async () => {
+  // chrome.storage.local.QUOTA_BYTES without the unlimitedStorage permission.
+  const defaultQuotaBytes = 10 * 1024 * 1024;
+  const itemCount = 10_000;
+  const state = sanitizeState({
+    items: Array.from({ length: itemCount }, (_, index) => {
+      const productId = String(1_000_000 + index);
+      const page = Math.floor(index / 10) + 1;
+      return {
+        productId,
+        source: "purchased",
+        title: `【VRChat想定】Sample Outfit for Avatar Ver.1.2 #${index}`,
+        sellerName: "Sample Shop",
+        sellerUrl: "https://sample-shop.booth.pm/",
+        imageUrl: `https://booth.pximg.net/c/300x300_a2_g5/abcdef/i/${productId}/base_resized.jpg`,
+        productUrl: `https://booth.pm/ja/items/${productId}`,
+        sourcePageUrl: `https://accounts.booth.pm/library?page=${page}`,
+        page,
+        orderOnPage: index % 10,
+        globalOrder: index,
+        downloadFiles: Array.from({ length: 8 }, (_, fileIndex) => ({
+          label: `SampleOutfit_Avatar${fileIndex}_v1.2.unitypackage`,
+          detail: "12.3 MB",
+        })),
+        supportedAvatarIds: ["karin", "manuka", "mizuki", "rusk", "shinano"],
+        supportIndexedAt: "2026-09-01T00:00:00.000Z",
+        supportIndexVersion: 1,
+      };
+    }),
+  });
+
+  assert.equal(state.items.length, itemCount);
+  assert.ok(new TextEncoder().encode(JSON.stringify(state)).byteLength > defaultQuotaBytes);
+  const manifest = JSON.parse(await readFile(new URL("../manifest.json", import.meta.url), "utf8"));
+  assert.ok(manifest.permissions.includes("unlimitedStorage"));
 });

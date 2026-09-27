@@ -15,6 +15,7 @@ import {
 } from "../src/booth.js";
 import { buildAvatarProfileIds, buildSearchVariants } from "../src/search.js";
 import { withExclusiveLock } from "../src/concurrency.js";
+import { demoDownloadOptions, demoState } from "../src/demo.js";
 
 const appSource = (await readFile(new URL("../src/app.js", import.meta.url), "utf8"))
   .replace(/\r\n/g, "\n");
@@ -264,12 +265,12 @@ test("2MiB를 넘는 실제 정리 백업도 내보낸 그대로 복원할 수 �
 
 test("실제 화면용 데모 상품은 첫 즐겨찾기 저장 뒤에도 모두 유지된다", async () => {
   const api = await freshStorage();
-  const app = appContext(["demoState", "demoDownloadOptions", "persistState", "toggleFavorite"], api);
-  api.useMemoryStorage(app.demoState());
+  const app = appContext(["persistState", "toggleFavorite"], api);
+  api.useMemoryStorage(demoState());
   app.state = await api.loadState();
   assert.equal(app.state.items.length, 12);
-  assert.equal(app.demoDownloadOptions(app.state.items[0]).length, 10);
-  assert.equal(app.demoDownloadOptions(app.state.items[0])[0].detail, "25 MB");
+  assert.equal(demoDownloadOptions(app.state.items[0]).length, 10);
+  assert.equal(demoDownloadOptions(app.state.items[0])[0].detail, "25 MB");
   const assignments = structuredClone(app.state.assignments);
   const key = app.state.items[1].key;
   await app.toggleFavorite(key);

@@ -54,6 +54,8 @@ import {
   useMemoryStorage,
 } from "./storage.js";
 import { startBoothDownload } from "./download.js";
+import { demoDownloadOptions, demoState } from "./demo.js";
+import { element, lucideIcon, setLucideIcon } from "./dom.js";
 import {
   applyDocumentTranslations,
   formatLocalizedDate,
@@ -187,123 +189,6 @@ const refs = Object.fromEntries(
     "red-pill-error", "red-pill-calculate",
   ].map((id) => [id, document.getElementById(id)]),
 );
-
-function demoState() {
-  const categories = [
-    { id: "avatar-assets", name: "아바타 에셋", order: 0, collapsed: false, createdAt: "2025-12-30T00:00:00.000Z" },
-    { id: "utilities", name: "도구와 월드", order: 1, collapsed: false, createdAt: "2025-12-31T00:00:00.000Z" },
-  ];
-  const folders = [
-    { id: "avatars", name: "아바타", parentId: null, categoryId: "avatar-assets", order: 0, createdAt: "2026-01-01T00:00:00.000Z" },
-    { id: "clothes", name: "의상", parentId: "avatars", categoryId: null, order: 0, createdAt: "2026-01-02T00:00:00.000Z" },
-    { id: "casual", name: "캐주얼", parentId: "clothes", categoryId: null, order: 0, createdAt: "2026-01-03T00:00:00.000Z" },
-    { id: "tools", name: "툴", parentId: null, categoryId: "utilities", order: 0, createdAt: "2026-01-04T00:00:00.000Z" },
-    { id: "world", name: "월드 소품", parentId: null, categoryId: "utilities", order: 1, createdAt: "2026-01-05T00:00:00.000Z" },
-  ];
-
-  const samples = [
-    ["Moonlit Wardrobe", "Lumen Atelier", "purchased"],
-    ["Soft Motion Presets", "Frame Picnic", "purchased"],
-    ["Cloud Room Collection", "Mellow Works", "gift"],
-    ["Everyday Hair Pack", "Plain Bloom", "purchased"],
-    ["Glass Garden Props", "Tiny Orbit", "gift"],
-    ["Studio Light Toolkit", "North Window", "purchased"],
-    ["Sunday Knit Set", "Cider Closet", "purchased"],
-    ["Paper Town Miniatures", "Little Draft", "gift"],
-    ["Warm Skin Materials", "Peach Lab", "purchased"],
-    ["Quiet Cafe World", "Blue Hour", "purchased"],
-    ["Ribbon Accessory Kit", "Fine Loop", "gift"],
-    ["ミルティナ Casual Set", "Mono Tools", "free"],
-  ];
-
-  const items = samples.map(([title, sellerName, source], index) => ({
-    key: `product:${990000000001 + index}`,
-    productId: String(990000000001 + index),
-    source,
-    sources: index === 0 ? ["purchased", "gift"] : [source],
-    title,
-    sellerName,
-    sellerUrl: `https://demo-seller-${index + 1}.booth.pm/`,
-    imageUrl: index === 0 ? "assets/icon128.png" : "",
-    productUrl: "https://booth.pm/",
-    sourcePageUrl: source === "gift"
-      ? "https://accounts.booth.pm/library/gifts?page=1"
-      : source === "free"
-        ? "https://accounts.booth.pm/library/free_downloads?page=1"
-        : "https://accounts.booth.pm/library?page=1",
-    page: 1,
-    orderOnPage: index,
-    globalOrder: index,
-    downloadFiles: Array.from({ length: index === 0 ? 4 : (index % 3) + 1 }, (_, fileIndex) => ({
-      label: `${title.replace(/\s+/gu, "_")}_${fileIndex + 1}.zip`,
-      detail: `${18 + (index * 7) + (fileIndex * 11)} MB`,
-    })),
-    locations: [
-      {
-        source,
-        sourcePageUrl: source === "gift"
-          ? "https://accounts.booth.pm/library/gifts?page=1"
-          : source === "free"
-            ? "https://accounts.booth.pm/library/free_downloads?page=1"
-            : "https://accounts.booth.pm/library?page=1",
-        page: 1,
-        orderOnPage: index,
-        globalOrder: index,
-      },
-      ...(index === 0 ? [{
-        source: "gift",
-        sourcePageUrl: "https://accounts.booth.pm/library/gifts?page=1",
-        page: 1,
-        orderOnPage: index,
-        globalOrder: index,
-      }] : []),
-    ],
-  }));
-
-  return {
-    schemaVersion: 6,
-    items,
-    categories,
-    folders,
-    favorites: [items[0].key, items[4].key, items[8].key],
-    assignments: {
-      [items[0].key]: ["clothes", "casual"],
-      [items[3].key]: ["avatars"],
-      [items[5].key]: ["tools"],
-      [items[6].key]: ["casual"],
-      [items[9].key]: ["world"],
-      [items[11].key]: ["tools"],
-    },
-    lastSyncedAt: "2026-07-19T06:20:00.000Z",
-  };
-}
-
-function element(tag, options = {}) {
-  const node = document.createElement(tag);
-  if (options.className) node.className = options.className;
-  if (options.text !== undefined) node.textContent = options.text;
-  if (options.attrs) {
-    for (const [name, value] of Object.entries(options.attrs)) {
-      if (value !== null && value !== undefined) node.setAttribute(name, String(value));
-    }
-  }
-  return node;
-}
-
-function lucideIcon(name, className = "") {
-  return element("span", {
-    className: `${className ? `${className} ` : ""}licon licon-${name}`,
-    attrs: { "aria-hidden": "true" },
-  });
-}
-
-function setLucideIcon(node, name) {
-  if (!node) return;
-  for (const className of [...node.classList]) {
-    if (className.startsWith("licon-")) node.classList.remove(className);
-  }
-  node.classList.add("licon", `licon-${name}`);
-}
 
 function formatCount(value) {
   return formatLocalizedNumber(value);
@@ -940,20 +825,6 @@ function getDownloadCardState(itemKey) {
     error: "",
     authRequired: false,
   };
-}
-
-function demoDownloadOptions(item) {
-  const sampleNumber = (Number.parseInt(String(item.productId).replace(/\D/g, ""), 10) % 1000) || 1;
-  const optionCount = sampleNumber === 1 ? 10 : (sampleNumber % 3) + 1;
-  return Array.from({ length: optionCount }, (_, index) => ({
-    id: `demo-${sampleNumber}-${index + 1}`,
-    label: t("{title} {kind}.zip", {
-      title: item.title,
-      kind: index ? t("추가 파일 {number}", { number: index + 1 }) : t("메인 파일"),
-    }),
-    detail: `${18 + (sampleNumber * 7) + (index * 13)} MB`,
-    url: `https://booth.pm/downloadables/${9_000_000 + (sampleNumber * 20) + index}?variation_id=${sampleNumber}`,
-  }));
 }
 
 function createDownloadBack(item, downloadState) {

@@ -10,10 +10,10 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.0.9");
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.version_name, manifest.version);
-  assert.deepEqual(manifest.permissions, ["storage"]);
+  assert.deepEqual(manifest.permissions, ["storage", "unlimitedStorage"]);
   assert.equal(manifest.host_permissions, undefined);
   assert.deepEqual(manifest.optional_host_permissions, [
     "https://accounts.booth.pm/*",
@@ -35,6 +35,8 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     "src/avatar-aliases.js",
     "src/booth.js",
     "src/concurrency.js",
+    "src/demo.js",
+    "src/dom.js",
     "src/i18n.js",
     "src/search.js",
     "src/storage.js",
@@ -74,7 +76,9 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.match(dashboard, /id="confirm-dialog-eyebrow"/);
   assert.match(dashboard, /id="confirm-dialog-title"/);
   assert.match(dashboard, /id="confirm-submit"/);
-  assert.match(dashboard, /id="service-version"[^>]*aria-label="버전 1\.0\.9"/);
+  const escapedVersion = manifest.version.replaceAll(".", "\\.");
+  assert.match(dashboard, new RegExp(`id="service-version"[^>]*aria-label="버전 ${escapedVersion}"`));
+  assert.match(dashboard, new RegExp(`<strong>${escapedVersion}</strong>`));
   assert.match(dashboard, /id="theme-toggle"/);
   assert.match(dashboard, /class="licon licon-sun" id="theme-toggle-icon"/);
   assert.doesNotMatch(dashboard, /id="theme-toggle"[^>]*aria-pressed/);
