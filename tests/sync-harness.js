@@ -77,6 +77,13 @@ export async function createSyncHarness({
     URL, URLSearchParams,
     Date: ClockDate,
     setTimeout: clock.setTimeout,
+    JSON: {
+      stringify: JSON.stringify,
+      parse(text) {
+        parses += 1;
+        return JSON.parse(text);
+      },
+    },
     DOMParser: class {
       parseFromString(html) {
         parses += 1;
@@ -114,7 +121,19 @@ export async function createSyncHarness({
         status: fixture.status ?? 200,
         ok: !fixture.status || fixture.status < 400,
         headers: { get: (name) => name === "Retry-After" ? fixture.retryAfter ?? null : null },
-        text: async () => JSON.stringify(fixture),
+        text: async () => {
+          // Product JSON endpoint: answer in BOOTH's item JSON shape.
+          if (address.pathname.endsWith(".json")) {
+            if (fixture.invalidJson) return "<!doctype html>";
+            return JSON.stringify({
+              id: Number(productId),
+              name: fixture.title ?? "",
+              description: fixture.description ?? "",
+              shop: { name: "" },
+            });
+          }
+          return JSON.stringify(fixture);
+        },
       };
     },
   };

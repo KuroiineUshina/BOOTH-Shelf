@@ -47,6 +47,7 @@ import {
   restoreOrganizationBackup,
   restrictStorageAccess,
   runLibraryOperation,
+  runSupportIndexOperation,
   sanitizeState,
   saveSpendingSummary,
   updatePreferences,
@@ -115,6 +116,7 @@ const ui = {
   confirmDeleteFolderId: null,
   dropSuccessFolderId: null,
   syncing: false,
+  indexingSupport: false,
   calculatingSpending: false,
 };
 const selectedItemKeys = new Set();
@@ -130,6 +132,8 @@ let state;
 let preferences;
 let spendingSummary;
 let renderTimer;
+let syncPanelHideTimer;
+let supportIndexController = null;
 let dropSuccessTimer;
 let contextMenuCloseTimer;
 let contextMenuReturnFocus;
@@ -494,7 +498,7 @@ async function calculateSpending() {
     ui.calculatingSpending = false;
     refs["red-pill-calculate"].disabled = false;
     refs["red-pill-button"].disabled = false;
-    refs["sync-button"].disabled = false;
+    refs["sync-button"].disabled = syncButtonBlocked();
     refs["clear-local-data"].disabled = false;
     refs["export-organization-data"].disabled = false;
     refs["import-organization-data"].disabled = false;
@@ -2077,6 +2081,7 @@ function toggleSortDirection() {
 }
 
 function setSyncPanel({ message, detail = "", percent = 0, tone = "default", login = false, hidden = false }) {
+  window.clearTimeout(syncPanelHideTimer);
   refs["sync-panel"].hidden = hidden;
   refs["sync-panel"].dataset.tone = tone;
   refs["sync-message"].textContent = message;
@@ -2128,6 +2133,78 @@ function mergeSupportIndex(currentItems, indexedItems) {
   });
 }
 
+function hideSyncPanelLater() {
+  window.clearTimeout(syncPanelHideTimer);
+  syncPanelHideTimer = window.setTimeout(() => setSyncPanel({ hidden: true }), 4200);
+}
+
+function syncButtonBlocked() {
+  return ui.syncing || ui.indexingSupport || ui.calculatingSpending;
+}
+
+function cancelSupportIndexing() {
+  supportIndexController?.abort();
+}
+
+// Avatar-support indexing runs after the library is saved, so the list is usable
+// right away; progress stays in the sync panel and checkpoints persist results.
+async function startSupportIndexing() {
+  if (IS_DEMO || ui.indexingSupport) return;
+  const controller = new AbortController();
+  supportIndexController = controller;
+  ui.indexingSupport = true;
+  refs["sync-button"].disabled = true;
+  refs["sync-button"].classList.add("is-syncing");
+
+  try {
+    const result = await runSupportIndexOperation(() => indexBoothProductSupport(state.items, {
+      signal: controller.signal,
+      onProgress: ({ completed, total }) => {
+        if (controller.signal.aborted || !total) return;
+        setSyncPanel({
+          message: t("상품 목록은 준비됐어요 · 지원 아바타 정보 확인 중"),
+          detail: t("{completed} / {total}개 상품 · 기다리지 않고 바로 사용할 수 있어요", {
+            completed: formatCount(completed),
+            total: formatCount(total),
+          }),
+          percent: Math.round((completed / total) * 100),
+        });
+      },
+      onCheckpoint: async (items) => {
+        await persistState((latest) => ({ ...latest, items: mergeSupportIndex(latest.items, items) }));
+      },
+    }));
+    if (controller.signal.aborted || !(result.scannedCount + result.failedCount)) return;
+
+    renderPreservingViewport();
+    setSyncPanel({
+      message: t("지원 아바타 정보를 모두 확인했어요"),
+      detail: `${t("{supported}개 상품의 지원 아바타 정보를 저장했습니다.", {
+        supported: formatCount(result.supportedProductCount),
+      })}${result.failedCount
+        ? t(" · {failed}개 상품 설명은 다음 동기화에서 다시 확인", { failed: formatCount(result.failedCount) })
+        : ""}`,
+      percent: 100,
+      tone: result.failedCount ? "default" : "success",
+    });
+    hideSyncPanelLater();
+  } catch (error) {
+    // Another window is already indexing, or the user deleted the data.
+    if (error?.code === "STATE_BUSY" || error?.code === "SUPPORT_INDEX_CANCELLED") return;
+    setSyncPanel({
+      message: t("지원 아바타 정보를 확인하지 못했어요"),
+      detail: error.message || t("잠시 후 다시 시도해 주세요."),
+      percent: 100,
+      tone: "error",
+    });
+  } finally {
+    if (supportIndexController === controller) supportIndexController = null;
+    ui.indexingSupport = false;
+    refs["sync-button"].classList.remove("is-syncing");
+    refs["sync-button"].disabled = syncButtonBlocked();
+  }
+}
+
 async function runDemoSync() {
   const phases = [
     [16, t("구매 목록 확인 중")],
@@ -2143,7 +2220,7 @@ async function runDemoSync() {
 }
 
 async function syncLibrary() {
-  if (ui.syncing) return;
+  if (ui.syncing || ui.indexingSupport) return;
   if (ui.calculatingSpending) {
     showToast(t("빨간약 계산이 끝난 뒤 동기화해 주세요."), "error");
     return;
@@ -2161,6 +2238,7 @@ async function syncLibrary() {
     percent: 5,
   });
 
+  let librarySynced = false;
   try {
     if (!IS_DEMO) {
       const permissionGranted = await requestBoothAccess({ productPages: true });
@@ -2179,7 +2257,7 @@ async function syncLibrary() {
       }
 
       const result = await syncBoothLibrary(({ message, completed, total }) => {
-        const percent = total ? Math.round(8 + (completed / total) * 44) : 8;
+        const percent = total ? Math.round(8 + (completed / total) * 92) : 8;
         setSyncPanel({
           message,
           detail: total ? t("{completed} / {total} 페이지", { completed, total }) : "",
@@ -2190,42 +2268,18 @@ async function syncLibrary() {
       downloadCardStates.clear();
       selectedItemKeys.clear();
       renderPreservingViewport();
-
-      const supportResult = await indexBoothProductSupport(state.items, {
-        onProgress: ({ message, completed, total }) => {
-          const percent = total ? Math.round(55 + (completed / total) * 43) : 98;
-          setSyncPanel({
-            message,
-            detail: total ? t("{completed} / {total}개 상품", { completed, total }) : "",
-            percent,
-          });
-        },
-        onCheckpoint: async (items) => {
-          await persistState((latest) => ({ ...latest, items: mergeSupportIndex(latest.items, items) }));
-        },
-      });
-      // The indexer waits for its final checkpoint; the same snapshot is already saved.
-      resetResultWindow();
-      render();
-      const supportRetryDetail = supportResult.failedCount
-        ? t(" · {failed}개 상품 설명은 다음 동기화에서 다시 확인", {
-          failed: formatCount(supportResult.failedCount),
-        })
-        : "";
       setSyncPanel({
         message: t("동기화가 끝났어요"),
-        detail: `${t("{items}개 상품 · {files}개 파일명 · {supported}개 상품의 지원 아바타 정보를 저장했습니다.", {
+        detail: t("{items}개 상품 · {files}개 파일명을 저장했습니다.", {
           items: formatCount(result.items.length),
           files: formatCount(result.downloadFileCount),
-          supported: formatCount(supportResult.supportedProductCount),
-        })}${supportRetryDetail}`,
+        }),
         percent: 100,
-        tone: supportResult.failedCount ? "default" : "success",
+        tone: "success",
       });
-      window.setTimeout(() => setSyncPanel({ hidden: true }), 4200);
-      showToast(supportResult.failedCount
-        ? t("일부 상품 설명은 다음 동기화에서 다시 확인해요.")
-        : t("라이브러리를 최신 상태로 업데이트했어요."));
+      hideSyncPanelLater();
+      showToast(t("라이브러리를 최신 상태로 업데이트했어요."));
+      librarySynced = true;
     });
   } catch (error) {
     const authError = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
@@ -2252,13 +2306,14 @@ async function syncLibrary() {
     });
   } finally {
     ui.syncing = false;
-    refs["sync-button"].disabled = false;
+    refs["sync-button"].disabled = syncButtonBlocked();
     refs["red-pill-button"].disabled = false;
     refs["clear-local-data"].disabled = false;
     refs["export-organization-data"].disabled = false;
     refs["import-organization-data"].disabled = false;
     refs["sync-button"].classList.remove("is-syncing");
   }
+  if (librarySynced) startSupportIndexing();
 }
 
 function openDataDeleteConfirmation() {
@@ -2383,6 +2438,7 @@ async function confirmDataDelete(event) {
   submitButton.disabled = true;
 
   try {
+    cancelSupportIndexing();
     await runLibraryOperation(async () => {
       state = await clearState();
       if (!IS_DEMO) await removeBoothAccess();

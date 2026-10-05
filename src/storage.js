@@ -9,7 +9,7 @@ import { withExclusiveLock } from "./concurrency.js";
 export const STORAGE_KEY = "boothShelfState";
 export const PREFERENCES_KEY = "boothShelfPreferences";
 export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
-export const SPENDING_SUMMARY_VERSION = 2;
+export const SPENDING_SUMMARY_VERSION = 3;
 export const ORGANIZATION_BACKUP_FORMAT = "booth-shelf-organization";
 export const ORGANIZATION_BACKUP_VERSION = 4;
 export const DEFAULT_SIDEBAR_WIDTH = 272;
@@ -25,6 +25,12 @@ const withStorageLock = (task) => withExclusiveLock(storageLockName("booth-shelf
 
 export function runLibraryOperation(task) {
   return withExclusiveLock(storageLockName("booth-shelf-library-operation"), task, { wait: false });
+}
+
+// Background avatar-support indexing runs outside the library operation so the
+// library stays usable; this lock keeps a single indexer across windows.
+export function runSupportIndexOperation(task) {
+  return withExclusiveLock(storageLockName("booth-shelf-support-index"), task, { wait: false });
 }
 
 export function isOwnStorageChange(value) {
