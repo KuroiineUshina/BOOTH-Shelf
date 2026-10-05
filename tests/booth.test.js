@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  getProductSupportMaxAgeMs,
+  isProductSupportIndexFresh,
+  parseBoothProductData,
   PRODUCT_SUPPORT_INDEX_VERSION,
   SOURCES,
   extractProductSupportSignals,
@@ -11,7 +14,6 @@ import {
   getPageNumber,
   groupBoothLibraryItems,
   isBoothOrderPaymentLabel,
-  isProductSupportIndexFresh,
   isSettledBoothOrderState,
   parseBoothOrderMoney,
   summarizeBoothOrderDetails,
@@ -210,4 +212,53 @@ test("결제 확인 주문의 결제 금액은 주문 번호별로 한 번만 �
   assert.deepEqual(summary.totals, { JPY: 800, USD: 5 });
   assert.equal(summary.orderCount, 3);
   assert.equal(summary.freeOrderCount, 1);
+});
+
+test("상품 JSON에서 설명·연결 상품·상품명 아바타를 HTML과 같은 방식으로 읽는다", () => {
+  const text = JSON.stringify({
+    id: 7386916,
+    name: "【VRC想定】Devil Long Wolf Hair",
+    shop: { name: "GLAY Unknown" },
+    description: [
+      "- 対応アバター",
+      "",
+      "オリジナル3Dモデル「マヌカ」",
+      "https://jingo1016.booth.pm/items/5058077",
+      "",
+      "シェーダー",
+      "lilToon",
+    ].join("\n"),
+  });
+  const parsed = parseBoothProductData(text, { productId: "7386916" });
+  assert.equal(parsed.support.descriptionFound, true);
+  assert.deepEqual(parsed.support.supportedAvatarIds, ["manuka"]);
+  assert.deepEqual(parsed.support.linkedProductIds, ["5058077"]);
+  assert.equal(parsed.profileId, null);
+  assert.equal(parseBoothProductData(JSON.stringify({
+    id: 5058077, name: "オリジナル3Dモデル「マヌカ」", shop: { name: "Jingo" }, description: "",
+  }), { productId: "5058077" }).profileId, "manuka");
+  for (const invalid of ["<!doctype html>", JSON.stringify({ id: 1, name: "x", description: "" }), JSON.stringify({ id: 7386916 })]) {
+    assert.throws(() => parseBoothProductData(invalid, { productId: "7386916" }), { code: "PRODUCT_DATA_INVALID" });
+  }
+});
+
+test("지원 아바타 색인 만료일은 상품마다 30~45일로 흩어진다", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const ages = Array.from({ length: 64 }, (_, index) => getProductSupportMaxAgeMs(String(5_000_000 + index)) / day);
+  assert.equal(Math.min(...ages), 30);
+  assert.equal(Math.max(...ages), 45);
+  assert.equal(new Set(ages).size, 16);
+  assert.equal(getProductSupportMaxAgeMs("5000000"), getProductSupportMaxAgeMs("5000000"));
+
+  const indexedAt = Date.parse("2026-09-01T00:00:00.000Z");
+  const items = Array.from({ length: 64 }, (_, index) => ({
+    productId: String(5_000_000 + index),
+    supportedAvatarIds: [],
+    supportIndexVersion: PRODUCT_SUPPORT_INDEX_VERSION,
+    supportIndexedAt: new Date(indexedAt).toISOString(),
+  }));
+  const staleOnDay = (days) => items.filter((item) => !isProductSupportIndexFresh(item, indexedAt + days * day)).length;
+  assert.equal(staleOnDay(29.9), 0);
+  assert.equal(staleOnDay(30), 4);
+  assert.equal(staleOnDay(45), 64);
 });

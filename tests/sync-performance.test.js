@@ -161,3 +161,33 @@ test("로그인 오류가 나면 다른 진행 중 요청까지 끝난 후 오�
   assert.equal(h.clock.timers.length, 0);
   assert.ok(h.requests.every((request) => Number.isFinite(request.end)));
 });
+
+test("상품 설명은 가벼운 상품 JSON으로 읽고 형식이 다를 때만 HTML로 한 번 대체한다", async () => {
+  const { items, products } = makeSupportItems(3);
+  products[items[1].productId] = { ...products[items[1].productId], invalidJson: true };
+  const h = await createSyncHarness({ products });
+  const result = await h.clock.settle(h.api.indexBoothProductSupport(items));
+  assert.equal(result.scannedCount, 3);
+  assert.deepEqual(
+    h.requests.map((request) => new URL(request.url).pathname).sort(),
+    [
+      `/ja/items/${items[0].productId}.json`,
+      `/ja/items/${items[1].productId}`,
+      `/ja/items/${items[1].productId}.json`,
+      `/ja/items/${items[2].productId}.json`,
+    ].sort(),
+  );
+  assert.deepEqual(structuredClone(result.items.map((item) => item.supportedAvatarIds)), [["misaki"], ["misaki"], ["misaki"]]);
+});
+
+test("중단 신호를 받으면 새 상품 요청을 시작하지 않고 중단 오류로 끝낸다", async () => {
+  const { items, products } = makeSupportItems(40);
+  const h = await createSyncHarness({ products });
+  const controller = new AbortController();
+  await assert.rejects(h.clock.settle(h.api.indexBoothProductSupport(items, {
+    signal: controller.signal,
+    onProgress: ({ completed }) => { if (completed === 5) controller.abort(); },
+  })), { code: "SUPPORT_INDEX_CANCELLED" });
+  assert.ok(h.requests.length < 12, `requests after abort: ${h.requests.length}`);
+  assert.equal(h.metrics().active, 0);
+});

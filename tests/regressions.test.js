@@ -11,6 +11,8 @@ import {
   indexBoothProductSupport,
   isProductSupportIndexFresh,
   parseBoothLibraryPage,
+  parseBoothOrderDetail,
+  summarizeBoothOrderDetails,
   PRODUCT_SUPPORT_INDEX_VERSION,
 } from "../src/booth.js";
 import { buildAvatarProfileIds, buildSearchVariants } from "../src/search.js";
@@ -177,7 +179,7 @@ test("계산 결과 저장이 끝나기 전 다른 창의 삭제를 막고 이�
   const refs = () => new Proxy({}, {
     get: (target, id) => target[id] ??= { querySelector: () => ({}), close() {} },
   });
-  const calculationApp = appContext(["calculateSpending"], {
+  const calculationApp = appContext(["calculateSpending", "syncButtonBlocked"], {
     ...calculating, refs: refs(), spendingSummary: null,
     requestBoothAccess: async () => true,
     calculateBoothSpending: async () => ({
@@ -190,8 +192,8 @@ test("계산 결과 저장이 끝나기 전 다른 창의 삭제를 막고 이�
   });
   const deletionMessages = [];
   let permissionRemovals = 0;
-  const deletionApp = appContext(["confirmDataDelete"], {
-    ...deleting, refs: refs(), preferences: null, spendingSummary: null,
+  const deletionApp = appContext(["confirmDataDelete", "cancelSupportIndexing"], {
+    ...deleting, refs: refs(), preferences: null, spendingSummary: null, supportIndexController: null,
     removeBoothAccess: async () => { permissionRemovals += 1; },
     applyLocalePreference() {}, applyLayoutPreferences() {}, setSyncPanel() {}, resetLibraryView() {},
     showToast: (message, tone) => deletionMessages.push({ message, tone }),
@@ -336,12 +338,12 @@ test("일본어 복합 검색은 아바타 단어만 추출해 지원 상품 전
 });
 
 test("상품 설명을 못 읽으면 기존 지원 정보·시각을 유지하고 다음 동기화에서 다시 시도한다", async (t) => {
-  let fetched = 0;
+  const fetched = [];
   replaceGlobal(t, "DOMParser", class {
     parseFromString() { return { querySelector: () => null, querySelectorAll: () => [] }; }
   });
   replaceGlobal(t, "fetch", async (url, options) => {
-    fetched += 1;
+    fetched.push(new URL(url).pathname);
     assert.equal(options.credentials, "omit");
     return { url, ok: true, text: async () => "no description" };
   });
@@ -357,7 +359,11 @@ test("상품 설명을 못 읽으면 기존 지원 정보·시각을 유지하�
   assert.deepEqual(result.items[0], old);
   assert.equal(isProductSupportIndexFresh(result.items[0], now), false);
   await indexBoothProductSupport(result.items, { now });
-  assert.equal(fetched, 2);
+  // Each sync tries the item JSON first, then falls back to the HTML page.
+  assert.deepEqual(fetched, [
+    "/ja/items/101.json", "/ja/items/101",
+    "/ja/items/101.json", "/ja/items/101",
+  ]);
 });
 
 test("자신의 파일명 저장 이벤트와 다른 창의 폴더 변경은 열린 다운로드를 유지한다", async (t) => {
@@ -410,4 +416,40 @@ test("지원 정보 저장 중 바뀐 파일명·즐겨찾기·폴더 배치를 
   assert.deepEqual(synced.favorites, latest.favorites);
   assert.deepEqual(structuredClone(synced.assignments), latest.assignments);
   assert.equal(latest.items[0].supportedAvatarIds?.includes("misaki") ?? false, false);
+});
+
+test("빨간약은 공지 제목의 날짜가 아니라 요청한 주문 번호로 주문을 구분한다", (t) => {
+  // BOOTH can place a site notice heading such as "…について 2026-09-27 12:00"
+  // above the order detail; every order used to resolve to order "2026".
+  replaceGlobal(t, "DOMParser", class {
+    parseFromString(amountText) {
+      const label = { textContent: "お支払い金額" };
+      const value = { textContent: amountText };
+      label.nextElementSibling = value;
+      label.parentElement = { querySelector: () => null };
+      const sheet = { querySelectorAll: () => [label, value] };
+      const state = {
+        classList: ["badge", "completed", "mx-0", "order-state"],
+        closest: (selector) => selector === ".sheet" ? sheet : null,
+        parentElement: sheet,
+      };
+      return {
+        querySelector: (selector) => selector === "main h1, h1"
+          ? { textContent: "台風の影響による荷物のお届け遅延について 2026-09-27 12:00" }
+          : null,
+        querySelectorAll: (selector) => selector === ".order-state" ? [state] : [],
+      };
+    }
+  });
+
+  const details = [["71001", "¥ 1,000"], ["71002", "2,500 JPY"], ["71003", "0 JPY"]]
+    .map(([orderId, amount]) => parseBoothOrderDetail(amount, {
+      orderId,
+      pageUrl: `https://accounts.booth.pm/orders/${orderId}`,
+    }));
+  assert.deepEqual(details.map((detail) => detail.orderId), ["71001", "71002", "71003"]);
+  const summary = summarizeBoothOrderDetails(details, "2026-09-27T00:00:00.000Z");
+  assert.deepEqual(summary.totals, { JPY: 3500 });
+  assert.equal(summary.orderCount, 3);
+  assert.equal(summary.freeOrderCount, 1);
 });

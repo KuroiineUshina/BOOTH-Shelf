@@ -1,6 +1,7 @@
 import {
   BOOTH_ACCOUNTS_ORIGIN,
   BOOTH_PRODUCT_ORIGIN,
+  buildProductDataUrl,
   buildProductPageUrl,
   buildOrderDetailUrl,
   buildOrdersPageUrl,
@@ -9,6 +10,7 @@ import {
   getBoothProductId,
   isAllowedLibraryUrl,
   isAllowedOrdersUrl,
+  isAllowedProductDataUrl,
   isAllowedProductUrl,
   sanitizeDownloadUrl,
   sanitizeImageUrl,
@@ -28,7 +30,10 @@ const MIN_REQUEST_INTERVAL_MS = 300;
 const SYNC_CONCURRENCY = 4;
 let nextRequestAt = 0;
 export const PRODUCT_SUPPORT_INDEX_VERSION = 2;
-const PRODUCT_SUPPORT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const PRODUCT_SUPPORT_MAX_AGE_MS = 30 * DAY_MS;
+// Spread re-checks over 30–45 days so a first full sync does not expire all at once.
+const PRODUCT_SUPPORT_MAX_AGE_SPREAD_DAYS = 16;
 const PRODUCT_SUPPORT_CHECKPOINT_SIZE = 12;
 
 export const SOURCES = Object.freeze([
@@ -638,16 +643,50 @@ function readProductSupport(documentNode, pageUrl) {
   };
 }
 
+function identityFromTitles(titleParts) {
+  const profileIds = [...new Set(titleParts.filter(Boolean).flatMap((value) => findAvatarProfileIdsInText(value)))];
+  return {
+    profileId: profileIds.length === 1 ? profileIds[0] : null,
+  };
+}
+
 function readProductIdentity(documentNode) {
-  const titleParts = [
+  return identityFromTitles([
     documentNode.querySelector('meta[property="og:title"]')?.getAttribute("content"),
     documentNode.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
     documentNode.querySelector("h1")?.textContent,
     documentNode.querySelector("title")?.textContent,
-  ].filter(Boolean);
-  const profileIds = [...new Set(titleParts.flatMap((value) => findAvatarProfileIdsInText(value)))];
+  ]);
+}
+
+// BOOTH's public item JSON carries the same plain-text description (with product
+// URLs inline) as the HTML page at a tenth of the size and without DOM parsing.
+export function parseBoothProductData(text, { productId }) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+  if (!data || typeof data !== "object" || String(data.id) !== String(productId)
+    || typeof data.name !== "string" || typeof data.description !== "string") {
+    const error = new Error(t("BOOTH 상품 정보 형식을 확인하지 못했어요."));
+    error.code = "PRODUCT_DATA_INVALID";
+    throw error;
+  }
+
+  const description = data.description.trim().slice(0, 40_000);
+  const shopName = typeof data.shop?.name === "string" ? data.shop.name : "";
   return {
-    profileId: profileIds.length === 1 ? profileIds[0] : null,
+    support: {
+      descriptionFound: Boolean(description),
+      ...extractProductSupportSignals(description),
+    },
+    // Mirrors the HTML og:title ("name - shop - BOOTH") plus the product name.
+    profileId: identityFromTitles([
+      shopName ? `${data.name} - ${shopName} - BOOTH` : "",
+      data.name,
+    ]).profileId,
   };
 }
 
@@ -764,9 +803,9 @@ export function parseBoothOrderDetail(html, { orderId, pageUrl } = {}) {
   assertAuthenticated(documentNode);
 
   const settlement = getOrderSettlementState(documentNode);
-  const headingOrderId = normalizeText(documentNode.querySelector("main h1, h1")?.textContent)
-    .match(/\b(\d{4,})\b/)?.[1];
-  const resolvedOrderId = headingOrderId || getBoothOrderId(pageUrl) || String(orderId || "");
+  // Trust the requested order URL. Page headings can belong to site notices
+  // whose dates (e.g. "2026-09-27") would otherwise merge every order into one.
+  const resolvedOrderId = getBoothOrderId(pageUrl) || String(orderId || "");
   if (!/^\d+$/.test(resolvedOrderId)) {
     throw new Error(t("BOOTH 주문 번호를 확인하지 못했어요."));
   }
@@ -865,6 +904,33 @@ async function fetchProductHtml(url, productId) {
   });
 
   if (!isAllowedProductUrl(response.url, productId)) {
+    throw new Error(t("BOOTH가 예상하지 않은 상품 주소로 이동해 응답을 차단했습니다."));
+  }
+  if (!response.ok) {
+    const error = new Error(t("BOOTH 응답 오류 ({status})", { status: response.status }));
+    error.status = response.status;
+    error.retryAfterMs = parseRetryAfter(response.headers.get("Retry-After"));
+    throw error;
+  }
+  return response.text();
+}
+
+async function fetchProductData(url, productId) {
+  if (!isAllowedProductDataUrl(url, productId)) {
+    throw new Error(t("허용되지 않은 BOOTH 상품 주소 요청을 차단했습니다."));
+  }
+
+  await waitForRequestSlot();
+  const response = await fetch(url, {
+    credentials: "omit",
+    redirect: "follow",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!isAllowedProductDataUrl(response.url, productId)) {
     throw new Error(t("BOOTH가 예상하지 않은 상품 주소로 이동해 응답을 차단했습니다."));
   }
   if (!response.ok) {
@@ -999,6 +1065,14 @@ async function runPool(tasks, concurrency, worker) {
   return results;
 }
 
+export function getProductSupportMaxAgeMs(productId) {
+  const numericId = Number.parseInt(String(productId || ""), 10);
+  const spreadDays = Number.isSafeInteger(numericId)
+    ? numericId % PRODUCT_SUPPORT_MAX_AGE_SPREAD_DAYS
+    : 0;
+  return PRODUCT_SUPPORT_MAX_AGE_MS + spreadDays * DAY_MS;
+}
+
 export function isProductSupportIndexFresh(item, now = Date.now()) {
   if (item?.supportIndexVersion !== PRODUCT_SUPPORT_INDEX_VERSION
     || !Array.isArray(item?.supportedAvatarIds)) {
@@ -1007,13 +1081,14 @@ export function isProductSupportIndexFresh(item, now = Date.now()) {
   const indexedAt = Date.parse(item.supportIndexedAt);
   return Number.isFinite(indexedAt)
     && now - indexedAt >= 0
-    && now - indexedAt < PRODUCT_SUPPORT_MAX_AGE_MS;
+    && now - indexedAt < getProductSupportMaxAgeMs(item.productId);
 }
 
 export async function indexBoothProductSupport(items, {
   onProgress = () => {},
   onCheckpoint = async () => {},
   now = Date.now(),
+  signal = null,
 } = {}) {
   const nextItems = (Array.isArray(items) ? items : []).map((item) => ({ ...item }));
   const tasks = nextItems
@@ -1031,6 +1106,15 @@ export async function indexBoothProductSupport(items, {
     const key = String(productId);
     if (!productSignals.has(key)) {
       productSignals.set(key, (async () => {
+        try {
+          const dataUrl = buildProductDataUrl(key);
+          const text = await fetchWithRetry(dataUrl, 3, (url) => fetchProductData(url, key));
+          return parseBoothProductData(text, { productId: key });
+        } catch (error) {
+          // Only an unexpected JSON shape falls back to the heavier HTML page;
+          // HTTP failures (404, 429, …) would fail the same way there.
+          if (error?.code !== "PRODUCT_DATA_INVALID") throw error;
+        }
         const pageUrl = buildProductPageUrl(key);
         const html = await fetchWithRetry(pageUrl, 3, (url) => fetchProductHtml(url, key));
         const documentNode = parseProductDocument(html, { productId: key, pageUrl });
@@ -1093,6 +1177,11 @@ export async function indexBoothProductSupport(items, {
   try {
     await runPool(tasks, SYNC_CONCURRENCY, async ({ item, itemIndex }) => {
       if (checkpointFailed) throw checkpointError;
+      if (signal?.aborted) {
+        const error = new Error(t("지원 아바타 정보 확인을 중단했어요."));
+        error.code = "SUPPORT_INDEX_CANCELLED";
+        throw error;
+      }
       let result;
       try {
         const { support } = await loadProductSignals(item.productId);

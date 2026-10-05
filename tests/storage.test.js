@@ -399,6 +399,7 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
   assert.deepEqual(summary.totals, { JPY: 1200, USD: 3.5 });
   assert.equal(summary.version, SPENDING_SUMMARY_VERSION);
   assert.equal("orderIds" in summary, false);
+  assert.equal(sanitizeSpendingSummary({ ...summary, version: 2 }), null);
   assert.equal(sanitizeSpendingSummary({
     totals: { JPY: 1200 },
     orderCount: 1,

@@ -50,6 +50,19 @@ export function buildProductPageUrl(productId) {
     : "";
 }
 
+export function buildProductDataUrl(productId) {
+  return /^\d+$/.test(String(productId || ""))
+    ? `${BOOTH_PRODUCT_ORIGIN}/ja/items/${productId}.json`
+    : "";
+}
+
+export function isAllowedProductDataUrl(value, expectedProductId) {
+  const url = parseHttpsUrl(value, BOOTH_PRODUCT_ORIGIN);
+  if (!url || url.origin !== BOOTH_PRODUCT_ORIGIN || url.search || url.hash) return false;
+  const productId = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/(\d+)\.json$/i)?.[1];
+  return Boolean(productId) && productId === String(expectedProductId);
+}
+
 export function isAllowedProductUrl(value, expectedProductId = null) {
   const url = parseHttpsUrl(value, BOOTH_PRODUCT_ORIGIN);
   if (!url || url.origin !== BOOTH_PRODUCT_ORIGIN || url.search || url.hash) return false;

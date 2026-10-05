@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildProductDataUrl,
   buildProductPageUrl,
   buildOrderDetailUrl,
   buildOrdersPageUrl,
@@ -9,6 +10,7 @@ import {
   getBoothOrderId,
   getBoothProductId,
   isAllowedOrdersUrl,
+  isAllowedProductDataUrl,
   isAllowedProductUrl,
   sanitizeImageUrl,
   sanitizeDownloadUrl,
@@ -81,4 +83,21 @@ test("구매 내역 URL은 목록과 숫자 주문 상세만 허용한다", () =
   assert.equal(isAllowedOrdersUrl("https://accounts.booth.pm/orders/83065237"), true);
   assert.equal(isAllowedOrdersUrl("https://accounts.booth.pm/orders?keyword=secret"), false);
   assert.equal(isAllowedOrdersUrl("https://evil.example/orders/83065237"), false);
+});
+
+test("상품 JSON 주소는 BOOTH 공개 상품 JSON만 허용한다", () => {
+  assert.equal(buildProductDataUrl("123"), "https://booth.pm/ja/items/123.json");
+  assert.equal(buildProductDataUrl("../1"), "");
+  assert.equal(isAllowedProductDataUrl("https://booth.pm/ja/items/123.json", "123"), true);
+  assert.equal(isAllowedProductDataUrl("https://booth.pm/items/123.json", "123"), true);
+  for (const url of [
+    "https://booth.pm/ja/items/124.json",
+    "https://booth.pm/ja/items/123",
+    "https://booth.pm/ja/items/123.json?x=1",
+    "https://shop.booth.pm/items/123.json",
+    "https://accounts.booth.pm/ja/items/123.json",
+    "http://booth.pm/ja/items/123.json",
+  ]) {
+    assert.equal(isAllowedProductDataUrl(url, "123"), false, url);
+  }
 });
