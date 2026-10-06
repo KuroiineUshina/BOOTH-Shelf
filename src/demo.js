@@ -28,7 +28,14 @@ export function demoState() {
     ["ミルティナ Casual Set", "Mono Tools", "free"],
   ];
 
+  const categories3d = [
+    [209, "3D衣装"], [216, "3Dモーション・アニメーション"], [127, "3Dモデル（その他）"],
+    [230, "3D髪型"], [210, "3D小道具"], [215, "3Dツール・システム"], [209, "3D衣装"],
+    [210, "3D小道具"], [214, "3Dテクスチャ"], [127, "3Dモデル（その他）"], [217, "3D装飾品"],
+    [209, "3D衣装"],
+  ];
   const items = samples.map(([title, sellerName, source], index) => ({
+    productCategory: { id: categories3d[index][0], name: categories3d[index][1], parentName: "3Dモデル" },
     key: `product:${990000000001 + index}`,
     productId: String(990000000001 + index),
     source,

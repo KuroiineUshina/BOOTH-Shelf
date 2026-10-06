@@ -6,6 +6,8 @@ import {
   normalizeSearchText,
 } from "./search.js";
 
+import { productCategorySearchLabels } from "./product-categories.js";
+
 export const MAX_FOLDER_DEPTH = 3;
 
 const collator = new Intl.Collator(["ko", "ja", "en"], {
@@ -36,7 +38,7 @@ export function getItemFolderIds(assignments, itemKey) {
 
 function searchIndexForItem(item) {
   if (!item || typeof item !== "object") {
-    return { title: [], seller: [], downloads: [], ownedAvatarIds: [] };
+    return { title: [], seller: [], downloads: [], kinds: [], ownedAvatarIds: [] };
   }
   const cached = itemSearchIndexCache.get(item);
   if (cached) return cached;
@@ -54,6 +56,7 @@ function searchIndexForItem(item) {
     title: buildLiteralSearchVariants(item.title),
     seller: buildLiteralSearchVariants(item.sellerName),
     downloads,
+    kinds: productCategorySearchLabels(item.productCategory).map(buildLiteralSearchVariants),
     ownedAvatarIds: [...detectedAvatarIds],
   };
   itemSearchIndexCache.set(item, index);
@@ -171,8 +174,10 @@ export function filterItems(items, filters = {}) {
       variantsMatch(queryVariants, variants)
     ));
     const supportMatches = supportedAvatarIdsMatchingSet(item, queryAvatarIds).length > 0;
+    const kindMatches = searchIndex.kinds.some((variants) => variantsMatch(queryVariants, variants));
 
     if (searchField === "title") return titleMatches;
+    if (searchField === "kind") return kindMatches;
     if (searchField === "seller") return sellerMatches;
     if (searchField === "download") return downloadMatches;
 
@@ -185,7 +190,7 @@ export function filterItems(items, filters = {}) {
       && !searchIndex.ownedAvatarIds.some((profileId) => queryAvatarIds.has(profileId))
     ) return false;
 
-    return titleMatches || sellerMatches || downloadMatches || supportMatches;
+    return titleMatches || sellerMatches || downloadMatches || kindMatches || supportMatches;
   });
 }
 

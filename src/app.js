@@ -57,6 +57,7 @@ import {
 import { startBoothDownload } from "./download.js";
 import { demoDownloadOptions, demoState } from "./demo.js";
 import { element, lucideIcon, setLucideIcon } from "./dom.js";
+import { productCategoryLabel } from "./product-categories.js";
 import {
   applyDocumentTranslations,
   formatLocalizedDate,
@@ -133,6 +134,8 @@ let preferences;
 let spendingSummary;
 let renderTimer;
 let syncPanelHideTimer;
+// Set when a type label (not the user) switched the search field to "kind".
+let searchFieldSetByLabel = false;
 let supportIndexController = null;
 let dropSuccessTimer;
 let contextMenuCloseTimer;
@@ -974,6 +977,53 @@ function createDownloadSearchMatch(item) {
   return match;
 }
 
+// BOOTH's own item category, shown under the title. It is filled in by the
+// background support index, so reused cards are updated in place.
+function createProductCategoryTag(item) {
+  const label = productCategoryLabel(item.productCategory, getLocale());
+  if (!label) return null;
+  const original = [item.productCategory.parentName, item.productCategory.name].filter(Boolean).join(" / ");
+  return element("button", {
+    className: "item-kind",
+    text: label,
+    attrs: {
+      type: "button",
+      "data-kind-search": label,
+      title: `BOOTH: ${original}`,
+      "aria-label": t("{label} 종류만 보기", { label }),
+    },
+  });
+}
+
+// Clicking a type label searches by type, so the active filter stays visible
+// (and clearable) in the search box instead of adding sidebar navigation.
+function searchByProductCategory(label) {
+  selectedItemKeys.clear();
+  ui.query = label;
+  if (ui.searchField !== "kind") searchFieldSetByLabel = true;
+  ui.searchField = "kind";
+  refs["search-input"].value = label;
+  refs["search-field"].value = "kind";
+  refs["search-clear"].hidden = false;
+  resetResultWindow();
+  render({ reconcileItems: true, animateItems: true });
+  refs["search-input"].scrollIntoView?.({ block: "nearest" });
+}
+
+function updateCardProductCategory(card, item) {
+  const currentTag = card.querySelector(".item-kind");
+  const nextTag = createProductCategoryTag(item);
+  if (currentTag && nextTag) {
+    if (currentTag.textContent !== nextTag.textContent) currentTag.replaceWith(nextTag);
+    return;
+  }
+  if (currentTag) {
+    currentTag.remove();
+    return;
+  }
+  if (nextTag) card.querySelector(".item-title")?.after(nextTag);
+}
+
 function updateCardSearchMatch(card, item) {
   const currentMatch = card.querySelector(".download-search-match");
   const nextMatch = createDownloadSearchMatch(item);
@@ -1114,6 +1164,8 @@ function createCard(item, index) {
     element("span", { text: t("다운로드하기") }),
   );
   content.append(seller, title);
+  const productCategoryTag = createProductCategoryTag(item);
+  if (productCategoryTag) content.append(productCategoryTag);
   const downloadMatch = createDownloadSearchMatch(item);
   if (downloadMatch) content.append(downloadMatch);
 
@@ -1753,6 +1805,7 @@ function reconcileCards(visible, { animateLayout = false } = {}) {
 
   const desiredCards = visible.map((item, index) => {
     const card = existingByKey.get(item.key) ?? createCard(item, index);
+    updateCardProductCategory(card, item);
     updateCardSearchMatch(card, item);
     card.hidden = false;
     card.style.setProperty("--card-index", String(Math.min(index, 12)));
@@ -2100,6 +2153,7 @@ function mergeSyncedItems(previousState, items, syncedAt) {
       supportedAvatarIds: [...(previous.supportedAvatarIds || [])],
       supportIndexedAt: previous.supportIndexedAt,
       supportIndexVersion: previous.supportIndexVersion,
+      productCategory: previous.productCategory ?? null,
     };
   });
   const keys = new Set(mergedItems.map((item) => item.key));
@@ -2129,6 +2183,7 @@ function mergeSupportIndex(currentItems, indexedItems) {
       supportedAvatarIds: indexed.supportedAvatarIds,
       supportIndexedAt: indexed.supportIndexedAt,
       supportIndexVersion: indexed.supportIndexVersion,
+      productCategory: indexed.productCategory ?? item.productCategory ?? null,
     };
   });
 }
@@ -3169,12 +3224,18 @@ function bindEvents() {
   refs["search-clear"].addEventListener("click", () => {
     ui.query = "";
     refs["search-input"].value = "";
+    if (searchFieldSetByLabel) {
+      ui.searchField = "all";
+      refs["search-field"].value = "all";
+      searchFieldSetByLabel = false;
+    }
     refs["search-clear"].hidden = true;
     resetResultWindow();
     scheduleResultRender();
     refs["search-input"].focus();
   });
   refs["search-field"].addEventListener("change", (event) => {
+    searchFieldSetByLabel = false;
     ui.searchField = event.target.value;
     resetResultWindow();
     renderItems({ reconcile: true, animateLayout: true });
@@ -3191,6 +3252,11 @@ function bindEvents() {
       return;
     }
     const card = event.target.closest(".item-card[data-item-key]");
+    const kindButton = event.target.closest("[data-kind-search]");
+    if (kindButton) {
+      searchByProductCategory(kindButton.dataset.kindSearch);
+      return;
+    }
     const selectButton = event.target.closest("[data-select-key]");
     if (selectButton) {
       toggleItemSelection(selectButton.dataset.selectKey);

@@ -217,6 +217,13 @@ function sanitizeSupportedAvatarIds(value) {
     .filter((entry) => AVATAR_PROFILE_ID_PATTERN.test(entry)))];
 }
 
+function sanitizeProductCategory(value) {
+  if (!isRecord(value) || !Number.isSafeInteger(value.id) || value.id <= 0) return null;
+  const name = cleanString(value.name, 80);
+  if (!name) return null;
+  return { id: value.id, name, parentName: cleanString(value.parentName, 80) };
+}
+
 function mergeDownloadFiles(...fileLists) {
   return sanitizeDownloadFiles(fileLists.flat());
 }
@@ -284,6 +291,7 @@ function sanitizeItem(value) {
     supportedAvatarIds: sanitizeSupportedAvatarIds(value.supportedAvatarIds),
     supportIndexedAt: cleanDate(value.supportIndexedAt),
     supportIndexVersion: nonNegativeInteger(value.supportIndexVersion),
+    productCategory: sanitizeProductCategory(value.productCategory),
     globalOrder: nonNegativeInteger(value.globalOrder),
   });
 }
@@ -310,6 +318,7 @@ function mergeItems(existing, incoming) {
     supportedAvatarIds: [...supportSource.supportedAvatarIds],
     supportIndexedAt: supportSource.supportIndexedAt,
     supportIndexVersion: supportSource.supportIndexVersion,
+    productCategory: supportSource.productCategory || existing.productCategory || incoming.productCategory,
     globalOrder: Math.min(existing.globalOrder, incoming.globalOrder),
   });
 }
