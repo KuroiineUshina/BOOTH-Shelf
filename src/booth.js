@@ -29,7 +29,8 @@ const MAX_RETRY_DELAY_MS = 30_000;
 const MIN_REQUEST_INTERVAL_MS = 300;
 const SYNC_CONCURRENCY = 4;
 let nextRequestAt = 0;
-export const PRODUCT_SUPPORT_INDEX_VERSION = 2;
+// 3: also stores the BOOTH item category read from the item JSON.
+export const PRODUCT_SUPPORT_INDEX_VERSION = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PRODUCT_SUPPORT_MAX_AGE_MS = 30 * DAY_MS;
 // Spread re-checks over 30–45 days so a first full sync does not expire all at once.
@@ -677,7 +678,19 @@ export function parseBoothProductData(text, { productId }) {
 
   const description = data.description.trim().slice(0, 40_000);
   const shopName = typeof data.shop?.name === "string" ? data.shop.name : "";
+  const categoryId = Number(data.category?.id);
+  const category = Number.isSafeInteger(categoryId) && categoryId > 0
+    && typeof data.category.name === "string" && data.category.name.trim()
+    ? {
+      id: categoryId,
+      name: data.category.name.trim().slice(0, 80),
+      parentName: typeof data.category.parent?.name === "string"
+        ? data.category.parent.name.trim().slice(0, 80)
+        : "",
+    }
+    : null;
   return {
+    category,
     support: {
       descriptionFound: Boolean(description),
       ...extractProductSupportSignals(description),
@@ -1121,6 +1134,7 @@ export async function indexBoothProductSupport(items, {
         return {
           support: readProductSupport(documentNode, pageUrl),
           profileId: readProductIdentity(documentNode).profileId,
+          category: null,
         };
       })());
     }
@@ -1184,7 +1198,7 @@ export async function indexBoothProductSupport(items, {
       }
       let result;
       try {
-        const { support } = await loadProductSignals(item.productId);
+        const { support, category } = await loadProductSignals(item.productId);
         if (!support.descriptionFound) {
           throw new Error(t("상품 설명을 확인하지 못했어요."));
         }
@@ -1202,6 +1216,8 @@ export async function indexBoothProductSupport(items, {
         const indexedItem = {
           ...item,
           supportedAvatarIds: [...supportedAvatarIds].sort(),
+          // The HTML fallback has no category; keep what an earlier sync found.
+          productCategory: category ?? item.productCategory ?? null,
         };
         if (!linkedProductFailed) {
           indexedItem.supportIndexedAt = new Date(now).toISOString();

@@ -38,6 +38,7 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     "src/demo.js",
     "src/dom.js",
     "src/i18n.js",
+    "src/product-categories.js",
     "src/search.js",
     "src/storage.js",
     "src/urls.js",
