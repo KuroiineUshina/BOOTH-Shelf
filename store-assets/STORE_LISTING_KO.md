@@ -46,9 +46,12 @@ BOOTH Shelf는 pixiv 또는 BOOTH의 공식 제품이 아닌 독립적인 오픈
 - 카테고리: 도구
 - 언어: 한국어
 - 스토어 아이콘: `assets/icon128.png`
-- 캡처화면 1: `store-assets/01-overview-and-folders.png`
-- 캡처화면 2: `store-assets/02-drag-and-drop.png`
-- 전 언어 공통 프로모션 동영상: 비워 두기
+- 캡처화면 1: `store-assets/01-library.png`
+- 캡처화면 2: `store-assets/02-avatar-search.png`
+- 캡처화면 3: `store-assets/03-folders.png`
+- 캡처화면 4: `store-assets/04-download.png`
+- 캡처화면 5: `store-assets/05-ai-connection.png`
+- 전 언어 공통 프로모션 동영상: YouTube에 올린 프로모션 영상 링크 (영상과 캡처화면의 상품·판매자는 모두 가상 데이터)
 - 작은 프로모션 타일: 비워 두기
 - 마키 프로모션 타일: 비워 두기
 - 공식 URL: 없음
