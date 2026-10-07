@@ -498,6 +498,20 @@ a.item-title:hover { color: var(--accent); }
 .settings-data-button:hover { background: var(--surface-strong); }
 .settings-danger-button { color: var(--danger); background: var(--danger-soft); }
 .settings-danger-button:hover { box-shadow: inset 0 0 0 1px var(--danger); }
+.settings-ai-section { display: grid; gap: var(--space-3); margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid var(--line); }
+.settings-ai-status { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--ink-soft); font-size: 0.75rem; line-height: 1.7; }
+.settings-ai-status[data-state="connected"] { color: var(--accent); }
+.settings-ai-command { display: block; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--ink); font-size: 0.75rem; overflow-wrap: anywhere; user-select: all; }
+.approval-page { display: grid; min-height: 100vh; place-items: start center; padding: 24px 16px; }
+.approval-panel { width: min(440px, 100%); }
+.approval-panel h1 { margin-top: 4px; font-size: 1.25rem; line-height: 1.4; }
+.approval-lead, .approval-note { margin-top: 12px; color: var(--ink-soft); font-size: 0.8125rem; line-height: 1.7; }
+.approval-note { color: var(--ink-muted); font-size: 0.75rem; }
+.approval-list { display: grid; gap: var(--space-2); max-height: 50vh; margin: 16px 0 0; padding: 0; overflow-y: auto; list-style: none; }
+.approval-item { display: grid; gap: 2px; padding: 12px; border-radius: var(--radius-sm); background: var(--surface-subtle); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.approval-shop { color: var(--ink-muted); font-size: 0.75rem; }
+.approval-files { margin: 6px 0 0; padding-left: 18px; color: var(--ink-soft); font-size: 0.75rem; line-height: 1.6; }
+.approval-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: 20px; }
 .red-pill-modal { width: min(520px, calc(100vw - 40px)); }
 .red-pill-eyebrow { color: var(--accent); letter-spacing: 0.08em; }
 .red-pill-intro { text-align: center; padding: 8px 0 20px; }

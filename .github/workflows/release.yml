@@ -40,10 +40,10 @@ jobs:
           store_dir="dist/chrome-web-store"
           store_archive="dist/booth-shelf-chrome-web-store-${GITHUB_REF_NAME}.zip"
           mkdir -p "$package_dir"
-          cp manifest.json background.js dashboard.html styles.css LICENSE README.md PRIVACY.md "$package_dir/"
+          cp manifest.json background.js dashboard.html offscreen.html approve.html styles.css LICENSE README.md PRIVACY.md "$package_dir/"
           cp -R assets src "$package_dir/"
           mkdir -p "$store_dir/assets"
-          cp manifest.json background.js dashboard.html styles.css "$store_dir/"
+          cp manifest.json background.js dashboard.html offscreen.html approve.html styles.css "$store_dir/"
           cp -R src "$store_dir/"
           cp assets/icon16.png assets/icon32.png assets/icon48.png assets/icon128.png "$store_dir/assets/"
           cp -R assets/lucide assets/kofi assets/paperlogy assets/m-plus-1 assets/gift "$store_dir/assets/"
@@ -54,7 +54,12 @@ jobs:
           (
             cd "$store_dir"
             zip -rq "../$(basename "$store_archive")" \
-              manifest.json background.js dashboard.html styles.css assets src
+              manifest.json background.js dashboard.html offscreen.html approve.html styles.css assets src
+          )
+          cp LICENSE mcp/LICENSE
+          (
+            cd mcp
+            npm pack --pack-destination ../dist
           )
       - name: Publish GitHub Release
         env:
@@ -69,6 +74,7 @@ jobs:
           assets=(
             "dist/booth-shelf-${GITHUB_REF_NAME}.zip"
             "dist/booth-shelf-chrome-web-store-${GITHUB_REF_NAME}.zip"
+            "dist/booth-shelf-mcp-${version}.tgz"
           )
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then

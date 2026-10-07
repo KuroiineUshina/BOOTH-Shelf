@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>BOOTH Shelf · AI 다운로드 승인</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="src/approve.js"></script>
+  </head>
+  <body class="approval-page">
+    <main class="approval-panel" aria-labelledby="approval-title">
+      <p class="eyebrow">AI 연결</p>
+      <h1 id="approval-title">다운로드 요청 확인</h1>
+      <p class="approval-lead" id="approval-lead">AI 도구가 아래 파일의 다운로드를 요청했어요. 허용하면 BOOTH에서 다운로드 폴더의 BOOTH Shelf 폴더로 받습니다.</p>
+      <ul class="approval-list" id="approval-list"></ul>
+      <p class="approval-note">요청한 적이 없다면 거절하세요. 5분 안에 선택하지 않으면 자동으로 거절됩니다.</p>
+      <div class="approval-actions">
+        <button class="secondary-button" id="approval-deny" type="button">거절</button>
+        <button class="primary-button" id="approval-allow" type="button">다운로드 허용</button>
+      </div>
+    </main>
+  </body>
+</html>

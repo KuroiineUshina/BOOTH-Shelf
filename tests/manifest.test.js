@@ -15,6 +15,8 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
   assert.equal(manifest.version_name, manifest.version);
   assert.deepEqual(manifest.permissions, ["storage", "unlimitedStorage"]);
   assert.equal(manifest.host_permissions, undefined);
+  // AI connection permissions are optional: existing installs are not disabled.
+  assert.deepEqual(manifest.optional_permissions, ["nativeMessaging", "downloads", "offscreen"]);
   assert.deepEqual(manifest.optional_host_permissions, [
     "https://accounts.booth.pm/*",
     "https://booth.pm/*",
@@ -30,8 +32,13 @@ test("Manifest V3 진입점과 프로젝트 자산이 모두 존재한다", asyn
     manifest.icons["128"],
     manifest.action.default_icon,
     "dashboard.html",
+    "offscreen.html",
+    "approve.html",
     "styles.css",
     "src/app.js",
+    "src/ai-bridge.js",
+    "src/approve.js",
+    "src/offscreen.js",
     "src/avatar-aliases.js",
     "src/booth.js",
     "src/concurrency.js",
