@@ -363,7 +363,7 @@ test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", as
 test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", () => {
   assert.deepEqual(
     sanitizePreferences({ theme: "dark", locale: "ja", injected: true }),
-    { theme: "dark", locale: "ja", sidebarWidth: 272, gridColumns: 4 },
+    { theme: "dark", locale: "ja", sidebarWidth: 272, gridColumns: 4, aiBridge: false },
   );
   assert.deepEqual(
     sanitizePreferences({
@@ -371,8 +371,9 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
       locale: "invalid",
       sidebarWidth: 999,
       gridColumns: 6,
+      aiBridge: true,
     }),
-    { theme: "system", locale: "auto", sidebarWidth: 420, gridColumns: 6 },
+    { theme: "system", locale: "auto", sidebarWidth: 420, gridColumns: 6, aiBridge: true },
   );
   assert.deepEqual(
     sanitizePreferences({
@@ -380,12 +381,13 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
       locale: "ko",
       sidebarWidth: 100,
       gridColumns: 5,
+      aiBridge: "true",
     }),
-    { theme: "light", locale: "ko", sidebarWidth: 220, gridColumns: 5 },
+    { theme: "light", locale: "ko", sidebarWidth: 220, gridColumns: 5, aiBridge: false },
   );
   assert.deepEqual(
     sanitizePreferences({ sidebarWidth: "320", gridColumns: 7 }),
-    { theme: "light", locale: "auto", sidebarWidth: 272, gridColumns: 4 },
+    { theme: "light", locale: "auto", sidebarWidth: 272, gridColumns: 4, aiBridge: false },
   );
 
   const summary = sanitizeSpendingSummary({

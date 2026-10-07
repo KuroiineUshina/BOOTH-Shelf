@@ -7,10 +7,11 @@ if (tag && !/^v\d+\.\d+\.\d+$/.test(tag)) {
   process.exit(1);
 }
 
-const [manifestText, packageText, dashboardText] = await Promise.all([
+const [manifestText, packageText, dashboardText, mcpPackageText] = await Promise.all([
   readFile(new URL("../manifest.json", import.meta.url), "utf8"),
   readFile(new URL("../package.json", import.meta.url), "utf8"),
   readFile(new URL("../dashboard.html", import.meta.url), "utf8"),
+  readFile(new URL("../mcp/package.json", import.meta.url), "utf8"),
 ]);
 
 const manifest = JSON.parse(manifestText);
@@ -21,6 +22,7 @@ const versions = {
   manifest: manifest.version,
   manifestVersionName: manifest.version_name,
   package: packageJson.version,
+  mcpPackage: JSON.parse(mcpPackageText).version,
   dashboardLabel: serviceVersion.match(/aria-label="버전 ([^"]+)"/)?.[1],
   dashboardText: serviceVersion.match(/<strong>([^<]+)<\/strong>/)?.[1],
 };

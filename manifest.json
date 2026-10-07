@@ -14,6 +14,11 @@
     "storage",
     "unlimitedStorage"
   ],
+  "optional_permissions": [
+    "nativeMessaging",
+    "downloads",
+    "offscreen"
+  ],
   "optional_host_permissions": [
     "https://accounts.booth.pm/*",
     "https://booth.pm/*"

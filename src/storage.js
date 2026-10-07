@@ -106,6 +106,7 @@ export function sanitizePreferences(value) {
     gridColumns: [4, 5, 6].includes(preferences.gridColumns)
       ? preferences.gridColumns
       : DEFAULT_GRID_COLUMNS,
+    aiBridge: preferences.aiBridge === true,
   };
 }
 

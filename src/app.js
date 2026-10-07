@@ -58,6 +58,7 @@ import { startBoothDownload } from "./download.js";
 import { demoDownloadOptions, demoState } from "./demo.js";
 import { element, lucideIcon, setLucideIcon } from "./dom.js";
 import { productCategoryLabel } from "./product-categories.js";
+import { AI_BRIDGE_PERMISSIONS } from "./ai-bridge.js";
 import {
   applyDocumentTranslations,
   formatLocalizedDate,
@@ -183,6 +184,7 @@ const refs = Object.fromEntries(
     "assign-folder-list", "assign-submit", "confirm-dialog", "confirm-form", "confirm-copy",
     "confirm-dialog-eyebrow", "confirm-dialog-title", "confirm-submit",
     "settings-button", "settings-dialog", "clear-local-data",
+    "ai-bridge-status", "ai-bridge-command", "ai-bridge-toggle",
     "export-organization-data", "import-organization-data",
     "organization-backup-file", "organization-restore-dialog",
     "organization-restore-form", "organization-restore-summary",
@@ -357,8 +359,78 @@ async function requestBoothAccess({ productPages = false } = {}) {
 async function removeBoothAccess() {
   if (typeof chrome === "undefined" || !chrome.permissions?.remove) return false;
   return chrome.permissions.remove({
+    permissions: [...AI_BRIDGE_PERMISSIONS],
     origins: [BOOTH_ACCOUNT_PERMISSION, BOOTH_PRODUCT_PERMISSION],
   });
+}
+
+const AI_BRIDGE_STATUS_MESSAGES = Object.freeze({
+  off: "꺼져 있어요.",
+  connecting: "연결 프로그램에 연결하는 중이에요.",
+  connected: "연결됐어요. AI 도구에서 BOOTH Shelf 도구를 쓸 수 있어요.",
+  host_missing: "연결 프로그램이 아직 설치되지 않았어요. 아래 명령을 한 번 실행한 뒤 Chrome을 다시 시작해 주세요.",
+  permission_missing: "권한이 없어 연결하지 못했어요. AI 연결을 다시 켜 주세요.",
+  error: "연결 프로그램을 시작하지 못했어요. 설정을 다시 열면 다시 연결해요.",
+});
+
+async function renderAiBridgeStatus({ reconnect = false } = {}) {
+  const enabled = Boolean(preferences?.aiBridge);
+  refs["ai-bridge-toggle"].textContent = t(enabled ? "AI 연결 끄기" : "AI 연결 켜기");
+  refs["ai-bridge-toggle"].disabled = IS_DEMO;
+  let status = "off";
+  let detail = "";
+  if (!IS_DEMO && enabled && typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    if (reconnect) {
+      refs["ai-bridge-status"].dataset.state = "connecting";
+      refs["ai-bridge-status"].textContent = t(AI_BRIDGE_STATUS_MESSAGES.connecting);
+    }
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "ai-bridge-status", reconnect });
+      status = response?.status || "error";
+      detail = response?.error || "";
+    } catch (error) {
+      status = "error";
+      detail = error?.message || "";
+    }
+  }
+  refs["ai-bridge-status"].dataset.state = status;
+  const message = IS_DEMO
+    ? t("미리보기에서는 AI 연결을 사용할 수 없어요.")
+    : t(AI_BRIDGE_STATUS_MESSAGES[status] || AI_BRIDGE_STATUS_MESSAGES.error);
+  // Chrome's own error text helps when the helper is installed but won't start.
+  refs["ai-bridge-status"].textContent = detail && ["host_missing", "error"].includes(status)
+    ? `${message} (${detail})`
+    : message;
+  const showCommand = status === "host_missing";
+  refs["ai-bridge-command"].hidden = !showCommand;
+  if (showCommand) {
+    refs["ai-bridge-command"].textContent = `npx booth-shelf-mcp install --extension-id ${chrome.runtime.id}`;
+  }
+}
+
+async function toggleAiBridge() {
+  if (IS_DEMO || typeof chrome === "undefined" || !chrome.permissions) return;
+  const enable = !preferences?.aiBridge;
+  refs["ai-bridge-toggle"].disabled = true;
+  try {
+    if (enable) {
+      const granted = await chrome.permissions.request({
+        permissions: [...AI_BRIDGE_PERMISSIONS],
+        origins: [BOOTH_ACCOUNT_PERMISSION, BOOTH_PRODUCT_PERMISSION],
+      });
+      if (!granted) {
+        showToast(t("AI 연결에 필요한 권한을 허용하지 않았어요."), "error");
+        return;
+      }
+    }
+    preferences = await updatePreferences((latest) => ({ ...latest, aiBridge: enable }));
+    if (!enable) await chrome.permissions.remove({ permissions: [...AI_BRIDGE_PERMISSIONS] });
+  } catch (error) {
+    showToast(t("AI 연결 설정을 바꾸지 못했어요: {message}", { message: error.message }), "error");
+  } finally {
+    refs["ai-bridge-toggle"].disabled = false;
+    await renderAiBridgeStatus({ reconnect: enable });
+  }
 }
 
 function showToast(message, tone = "default") {
@@ -542,6 +614,7 @@ function syncSidebarAccessibility() {
 
 function openSettingsDialog() {
   refs["settings-dialog"].showModal();
+  void renderAiBridgeStatus({ reconnect: true });
 }
 
 async function saveSidebarWidth(width) {
@@ -3155,6 +3228,7 @@ function bindEvents() {
     void cycleLocale();
   });
   refs["settings-button"].addEventListener("click", openSettingsDialog);
+  refs["ai-bridge-toggle"].addEventListener("click", () => { void toggleAiBridge(); });
   refs["red-pill-button"].addEventListener("click", openRedPillDialog);
   refs["red-pill-calculate"].addEventListener("click", calculateSpending);
   refs["sidebar-open"].addEventListener("click", openSidebar);
