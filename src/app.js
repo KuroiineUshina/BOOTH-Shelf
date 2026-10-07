@@ -184,7 +184,7 @@ const refs = Object.fromEntries(
     "assign-folder-list", "assign-submit", "confirm-dialog", "confirm-form", "confirm-copy",
     "confirm-dialog-eyebrow", "confirm-dialog-title", "confirm-submit",
     "settings-button", "settings-dialog", "clear-local-data",
-    "ai-bridge-status", "ai-bridge-command", "ai-bridge-toggle",
+    "ai-bridge-status", "ai-bridge-command", "ai-bridge-toggle", "ai-approve-downloads",
     "export-organization-data", "import-organization-data",
     "organization-backup-file", "organization-restore-dialog",
     "organization-restore-form", "organization-restore-summary",
@@ -373,10 +373,24 @@ const AI_BRIDGE_STATUS_MESSAGES = Object.freeze({
   error: "연결 프로그램을 시작하지 못했어요. 설정을 다시 열면 다시 연결해요.",
 });
 
+async function saveAiApproveDownloads(checked) {
+  try {
+    preferences = await updatePreferences((latest) => ({ ...latest, aiApproveDownloads: checked }));
+    showToast(t(checked
+      ? "AI가 다운로드할 때마다 승인 창을 띄워요."
+      : "이제 AI가 요청한 파일을 묻지 않고 바로 받아요."));
+  } catch (error) {
+    refs["ai-approve-downloads"].checked = !checked;
+    showToast(t("AI 연결 설정을 바꾸지 못했어요: {message}", { message: error.message }), "error");
+  }
+}
+
 async function renderAiBridgeStatus({ reconnect = false } = {}) {
   const enabled = Boolean(preferences?.aiBridge);
   refs["ai-bridge-toggle"].textContent = t(enabled ? "AI 연결 끄기" : "AI 연결 켜기");
   refs["ai-bridge-toggle"].disabled = IS_DEMO;
+  refs["ai-approve-downloads"].checked = preferences?.aiApproveDownloads !== false;
+  refs["ai-approve-downloads"].disabled = IS_DEMO;
   let status = "off";
   let detail = "";
   if (!IS_DEMO && enabled && typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
@@ -3229,6 +3243,9 @@ function bindEvents() {
   });
   refs["settings-button"].addEventListener("click", openSettingsDialog);
   refs["ai-bridge-toggle"].addEventListener("click", () => { void toggleAiBridge(); });
+  refs["ai-approve-downloads"].addEventListener("change", (event) => {
+    void saveAiApproveDownloads(event.target.checked);
+  });
   refs["red-pill-button"].addEventListener("click", openRedPillDialog);
   refs["red-pill-calculate"].addEventListener("click", calculateSpending);
   refs["sidebar-open"].addEventListener("click", openSidebar);
