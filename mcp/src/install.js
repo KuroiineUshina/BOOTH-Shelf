@@ -108,17 +108,18 @@ export function applyInstall(plan, { packageRoot }) {
 // LocalCache right after writing it.
 export function findVirtualizedInstall(plan, { env = process.env, platform = process.platform } = {}) {
   if (platform !== "win32" || !env.LOCALAPPDATA) return null;
-  const packages = path.win32.join(env.LOCALAPPDATA, "Packages");
+  // Filesystem paths use the running OS's separators (Windows in practice).
+  const packages = path.join(env.LOCALAPPDATA, "Packages");
   let entries = [];
   try {
     entries = readdirSync(packages, { withFileTypes: true });
   } catch {
     return null;
   }
-  const relative = path.win32.relative(env.LOCALAPPDATA, plan.directory);
+  const folderName = path.win32.basename(plan.directory);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const candidate = path.win32.join(packages, entry.name, "LocalCache", "Local", relative, `${HOST_NAME}.json`);
+    const candidate = path.join(packages, entry.name, "LocalCache", "Local", folderName, `${HOST_NAME}.json`);
     if (existsSync(candidate)) return candidate;
   }
   return null;
