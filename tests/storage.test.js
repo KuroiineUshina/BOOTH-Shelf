@@ -363,7 +363,7 @@ test("전체 삭제는 메모리 저장소도 기본 상태로 되돌린다", as
 test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", () => {
   assert.deepEqual(
     sanitizePreferences({ theme: "dark", locale: "ja", injected: true }),
-    { theme: "dark", locale: "ja", sidebarWidth: 272, gridColumns: 4, aiBridge: false },
+    { theme: "dark", locale: "ja", sidebarWidth: 272, gridColumns: 4, aiBridge: false, aiApproveDownloads: true },
   );
   assert.deepEqual(
     sanitizePreferences({
@@ -372,9 +372,13 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
       sidebarWidth: 999,
       gridColumns: 6,
       aiBridge: true,
+      aiApproveDownloads: false,
     }),
-    { theme: "system", locale: "auto", sidebarWidth: 420, gridColumns: 6, aiBridge: true },
+    { theme: "system", locale: "auto", sidebarWidth: 420, gridColumns: 6, aiBridge: true, aiApproveDownloads: false },
   );
+  // Only an explicit false turns the approval window off.
+  assert.equal(sanitizePreferences({ aiApproveDownloads: "false" }).aiApproveDownloads, true);
+  assert.equal(sanitizePreferences({ aiApproveDownloads: 0 }).aiApproveDownloads, true);
   assert.deepEqual(
     sanitizePreferences({
       theme: "unknown",
@@ -383,11 +387,11 @@ test("화면 설정과 결제 합계 캐시는 허용된 값만 저장한다", (
       gridColumns: 5,
       aiBridge: "true",
     }),
-    { theme: "light", locale: "ko", sidebarWidth: 220, gridColumns: 5, aiBridge: false },
+    { theme: "light", locale: "ko", sidebarWidth: 220, gridColumns: 5, aiBridge: false, aiApproveDownloads: true },
   );
   assert.deepEqual(
     sanitizePreferences({ sidebarWidth: "320", gridColumns: 7 }),
-    { theme: "light", locale: "auto", sidebarWidth: 272, gridColumns: 4, aiBridge: false },
+    { theme: "light", locale: "auto", sidebarWidth: 272, gridColumns: 4, aiBridge: false, aiApproveDownloads: true },
   );
 
   const summary = sanitizeSpendingSummary({

@@ -98,6 +98,7 @@ const bridge = createAiBridge({
   loadState,
   loadDownloadOptions,
   requestApproval,
+  shouldAskApproval: async () => (await loadPreferences().catch(() => null))?.aiApproveDownloads !== false,
   startDownload,
   getDownload,
   extensionVersion: chrome.runtime.getManifest?.().version || "",

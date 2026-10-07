@@ -91,6 +91,7 @@ export function createAiBridge({
   loadState,
   loadDownloadOptions,
   requestApproval,
+  shouldAskApproval = async () => true,
   startDownload,
   getDownload,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -167,6 +168,7 @@ export function createAiBridge({
     return {
       jobId: job.id,
       status: job.status,
+      approval: job.approvedBy === "setting" ? "not_required" : "user",
       files: job.files.map((file) => ({
         productId: file.productId,
         name: file.name,
@@ -212,7 +214,11 @@ export function createAiBridge({
   }
 
   async function runJob(job) {
-    const approved = await requestApproval({
+    // The user can turn the approval window off in settings; the URL,
+    // library and size limits above still apply either way.
+    const askUser = await shouldAskApproval();
+    job.approvedBy = askUser ? "user" : "setting";
+    const approved = !askUser || await requestApproval({
       jobId: job.id,
       items: job.items.map(({ item, files }) => ({
         productId: item.productId,

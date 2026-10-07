@@ -32,7 +32,7 @@ function libraryState() {
   });
 }
 
-function createHarness({ approve = true, downloadState = "complete" } = {}) {
+function createHarness({ approve = true, downloadState = "complete", askApproval = true } = {}) {
   const calls = { approvals: [], downloads: [], loads: [] };
   let clock = 0;
   const bridge = createAiBridge({
@@ -44,6 +44,7 @@ function createHarness({ approve = true, downloadState = "complete" } = {}) {
         { id: "7002", label: `${item.productId}_extra.zip`, detail: "", url: "https://booth.pm/downloadables/7002" },
       ];
     },
+    shouldAskApproval: async () => askApproval,
     requestApproval: async (request) => {
       calls.approvals.push(request);
       return approve;
@@ -135,6 +136,22 @@ test("다운로드는 사용자 승인 뒤에만 시작하고 완료 경로를 �
   assert.equal(job.status, "complete");
   assert.ok(job.files.every((file) => file.status === "complete" && file.path.endsWith(".zip")));
   assert.deepEqual(await bridge.handle("download_status", { jobId: job.jobId }), job);
+});
+
+test("승인 창 설정을 끄면 묻지 않고 받되 BOOTH 주소·개수 제한은 유지한다", async () => {
+  const { bridge, calls } = createHarness({ askApproval: false, approve: false });
+  const job = await bridge.handle("download", { items: [{ productId: "101", fileIds: ["7001"] }] });
+  assert.equal(calls.approvals.length, 0, "no approval window");
+  assert.equal(calls.downloads.length, 1);
+  assert.equal(job.status, "complete");
+  assert.equal(job.approval, "not_required");
+  await assert.rejects(bridge.handle("download", {
+    items: Array.from({ length: 11 }, (_, index) => ({ productId: String(index) })),
+  }), { code: "INVALID_PARAMS" });
+
+  const asked = createHarness();
+  assert.equal((await asked.bridge.handle("download", { items: [{ productId: "101", fileIds: ["7001"] }] })).approval, "user");
+  assert.equal(asked.calls.approvals.length, 1);
 });
 
 test("거절한 다운로드는 아무 파일도 받지 않는다", async () => {

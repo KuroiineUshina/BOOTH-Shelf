@@ -107,6 +107,7 @@ export function sanitizePreferences(value) {
       ? preferences.gridColumns
       : DEFAULT_GRID_COLUMNS,
     aiBridge: preferences.aiBridge === true,
+    aiApproveDownloads: preferences.aiApproveDownloads !== false,
   };
 }
 
