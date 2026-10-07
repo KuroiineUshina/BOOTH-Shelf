@@ -137,7 +137,7 @@ test("MSIX 앱 안에서 실행되어 설치가 가상화되면 감지한다", (
   writeFileSync(path.join(redirected, "com.kuroiineushina.booth_shelf.json"), "{}");
   assert.equal(
     findVirtualizedInstall(plan, { env, platform: "win32" }),
-    path.win32.join(localAppData, "Packages", "Claude_test", "LocalCache", "Local", "BOOTH Shelf MCP", "com.kuroiineushina.booth_shelf.json"),
+    path.join(localAppData, "Packages", "Claude_test", "LocalCache", "Local", "BOOTH Shelf MCP", "com.kuroiineushina.booth_shelf.json"),
   );
   assert.equal(findVirtualizedInstall(plan, { env, platform: "linux" }), null);
 });
