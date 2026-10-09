@@ -3,7 +3,7 @@
   "version": "1.0.12",
   "description": "Connect AI tools (Claude Code, Codex) to your BOOTH library through the BOOTH Shelf browser extension.",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "author": "KuroiineUshina",
   "homepage": "https://github.com/KuroiineUshina/BOOTH-Shelf/tree/main/mcp",
   "repository": {
