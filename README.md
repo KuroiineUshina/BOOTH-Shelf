@@ -12,7 +12,7 @@ BOOTH의 내 라이브러리·받은 기프트·무료 다운로드를 한 화�
 [![Chrome 웹 스토어](https://img.shields.io/chrome-web-store/v/aibjhdieagkjmcodaiopaklonjbdmbpj?label=Chrome%20%EC%9B%B9%20%EC%8A%A4%ED%86%A0%EC%96%B4&color=d22d45&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb)
 [![사용자](https://img.shields.io/chrome-web-store/users/aibjhdieagkjmcodaiopaklonjbdmbpj?label=%EC%82%AC%EC%9A%A9%EC%9E%90&color=20242c)](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb)
 [![GitHub Release](https://img.shields.io/github/v/release/KuroiineUshina/BOOTH-Shelf?label=Release&color=20242c)](https://github.com/KuroiineUshina/BOOTH-Shelf/releases/latest)
-[![MIT License](https://img.shields.io/badge/license-MIT-20242c)](LICENSE)
+[![GPL-3.0 License](https://img.shields.io/badge/license-GPL--3.0-20242c)](LICENSE)
 
 ### [▶ Chrome 웹 스토어에서 설치하기](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb)
 
@@ -216,7 +216,11 @@ UI 미리보기는 정적 서버에서 `dashboard.html?demo=1`을 열면 실제 
 
 ## 📄 라이선스
 
-[MIT License](LICENSE)로 배포됩니다. BOOTH 및 pixiv의 명칭과 서비스는 각 권리자에게 있으며, 이 프로젝트는 BOOTH 또는 pixiv의 공식 제품이 아닙니다.
+Copyright (C) 2026 KuroiineUshina
+
+[GNU General Public License v3.0](LICENSE) 또는 그 이후 버전(GPL-3.0-or-later)으로 배포됩니다. 코드를 자유롭게 사용·수정·재배포할 수 있지만, 수정하거나 포함해 배포하는 프로그램도 같은 GPL 조건으로 소스 코드를 공개해야 합니다. 1.0.12까지 공개된 버전은 MIT License로 배포되었으며, 해당 버전에는 MIT 조건이 계속 적용됩니다.
+
+BOOTH 및 pixiv의 명칭과 서비스는 각 권리자에게 있으며, 이 프로젝트는 BOOTH 또는 pixiv의 공식 제품이 아닙니다.
 
 - UI 아이콘: [Lucide Icons](https://lucide.dev/) (ISC 라이선스, 전문은 [`assets/lucide/LICENSE`](assets/lucide/LICENSE))
 - 글꼴: 한국어·영어 UI에는 [Paperlogy](https://freesentation.blog/paperlogyfont), 일본어 UI에는 [M PLUS 1](https://mplusfonts.github.io/)을 사용합니다. Paperlogy의 영문은 Montserrat를 기반으로 하며, 두 서체는 확장프로그램 내부에 포함되어 원격 글꼴을 내려받지 않습니다. 두 서체 모두 SIL Open Font License 1.1에 따라 배포되며 라이선스 전문과 출처는 [`assets/paperlogy`](assets/paperlogy)와 [`assets/m-plus-1`](assets/m-plus-1)에서 확인할 수 있습니다.
