@@ -4,6 +4,8 @@
 
 # BOOTH Shelf
 
+**한국어** · [English](README.en.md) · [简体中文](README.zh-CN.md)
+
 **BOOTH에서 산 에셋을 다시 찾는 가장 빠른 방법**
 
 BOOTH의 내 라이브러리·받은 기프트·무료 다운로드를 한 화면에서 검색하고,<br>
