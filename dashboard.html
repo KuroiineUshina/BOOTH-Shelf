@@ -72,6 +72,16 @@
               <span class="nav-label">구매한 상품</span>
               <span class="nav-count" id="purchased-count">0</span>
             </button>
+            <button class="nav-row" type="button" id="cart-nav" aria-pressed="false">
+              <span class="nav-icon licon licon-shopping-cart" aria-hidden="true"></span>
+              <span class="nav-label">장바구니</span>
+              <span class="nav-count" id="cart-count" hidden>0</span>
+            </button>
+            <button class="nav-row" type="button" id="wishlist-nav" aria-pressed="false">
+              <span class="nav-icon licon licon-heart" aria-hidden="true"></span>
+              <span class="nav-label">위시리스트</span>
+              <span class="nav-count" id="wishlist-count" hidden>0</span>
+            </button>
             <button class="nav-row" type="button" data-source="gift">
               <span class="nav-icon licon licon-gift" aria-hidden="true"></span>
               <span class="nav-label">받은 기프트</span>
@@ -143,6 +153,16 @@
             <p class="eyebrow" id="view-eyebrow">내 BOOTH 보관함</p>
             <h1 id="view-title">전체 상품</h1>
             <p class="view-description" id="view-description">구매한 상품, 받은 기프트와 무료 다운로드를 한눈에 확인하세요.</p>
+            <div class="wishlist-filters" id="wishlist-filters" role="group" aria-label="위시리스트 표시 범위" hidden>
+              <button class="filter-chip" id="wishlist-include-cart" type="button" aria-pressed="false">
+                <span class="licon licon-shopping-cart" aria-hidden="true"></span>
+                <span>장바구니 포함</span>
+              </button>
+              <button class="filter-chip" id="wishlist-include-owned" type="button" aria-pressed="false">
+                <span class="licon licon-shopping-bag" aria-hidden="true"></span>
+                <span>구매한 상품 포함</span>
+              </button>
+            </div>
           </div>
 
           <div class="hero-meta">
@@ -264,6 +284,41 @@
         <div class="load-more-sentinel" id="load-more-sentinel" role="status" aria-label="상품 더 불러오는 중" hidden>
           <span class="licon licon-loader-circle" aria-hidden="true"></span>
         </div>
+
+        <section class="cart-view" id="cart-view" aria-label="장바구니" hidden>
+          <div class="cart-toolbar">
+            <label class="search-box cart-search" for="cart-search-input">
+              <span class="search-symbol licon licon-search" aria-hidden="true"></span>
+              <input
+                id="cart-search-input"
+                type="search"
+                aria-label="장바구니 검색"
+                autocomplete="off"
+                placeholder="상품명·판매자·옵션 검색"
+              >
+            </label>
+            <label class="cart-owned-toggle" id="cart-owned-option">
+              <input type="checkbox" id="cart-hide-owned">
+              <span>이미 보유한 상품 숨기기</span>
+            </label>
+            <button class="secondary-button cart-refresh" id="cart-refresh" type="button">
+              <span class="licon licon-refresh-cw" aria-hidden="true"></span>
+              <span id="cart-refresh-label">장바구니 새로고침</span>
+            </button>
+          </div>
+
+          <div class="cart-summary" id="cart-summary" role="status" aria-live="polite"></div>
+          <div class="cart-shops" id="cart-shops"></div>
+
+          <div class="empty-state cart-empty" id="cart-empty" hidden>
+            <h2 id="cart-empty-title">장바구니를 불러와 주세요</h2>
+            <p id="cart-empty-description">BOOTH에 로그인한 브라우저에서 장바구니에 담은 상품을 읽어옵니다.</p>
+            <div class="empty-actions">
+              <button class="primary-button" id="cart-empty-load" type="button">장바구니 불러오기</button>
+              <a class="secondary-button" id="cart-login-link" href="https://booth.pm/users/sign_in" target="_blank" rel="noreferrer" hidden>BOOTH 로그인 열기</a>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
 

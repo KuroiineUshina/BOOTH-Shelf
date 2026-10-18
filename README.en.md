@@ -62,6 +62,16 @@ https://github.com/user-attachments/assets/f3fc61f1-6b18-4291-9339-c1505544dcab
 - Right-click menus on cards and folders for download, item page, seller shop, and folder management
 - Back up and restore categories, folders, placements, and favorites as JSON
 
+### 🛒 Cart
+- Open **Cart** in the sidebar to see the items in your BOOTH cart grouped by shop, and search by title, seller, or option
+- Mark or hide items you already own, and see per-shop subtotals and the overall total
+- Cart contents stay in the page's memory and are never stored
+
+### ♡ Wishlist
+- Open **Wishlist** in the sidebar to see the items you liked (スキ) on BOOTH. Items you already own or have in your cart are hidden by default; turn on **Include cart** or **Include purchases** to show them
+- Search by title or seller; sold-out and discontinued items are marked
+- Wishlist contents also stay in the page's memory and are never stored
+
 ### ⬇️ Downloads and navigation
 - Flip a card to see its download files and download the selected ones directly
 - Click the title to open the BOOTH item page, or the seller name to open the seller's shop
@@ -152,8 +162,8 @@ There is no separate server or analytics; all data is stored only in this browse
 |---|---|---|
 | `storage` | Always | Store item info for search, plus favorites, categories, and folders on this device |
 | `unlimitedStorage` | Always | Lift the default 10 MB local storage limit for large libraries. Reads or sends no additional data |
-| `https://accounts.booth.pm/*` | Requested on first **Sync all** or **Reality check** | Read the signed-in user's Library, Gifts, and Free downloads pages, and payment amounts from order history when running **Reality check** |
-| `https://booth.pm/*` | Requested on first **Sync all** | Read public descriptions and linked item pages of owned items to find supported avatars. Sends no login information |
+| `https://accounts.booth.pm/*` | Requested on first **Sync all**, **Reality check**, or **Wishlist** | Read the signed-in user's Library, Gifts, and Free downloads pages, payment amounts from order history when running **Reality check**, and your liked items when opening **Wishlist** |
+| `https://booth.pm/*` | Requested on first **Sync all** or **Cart** | Read public descriptions and linked item pages of owned items to find supported avatars (sends no login information), and read your cart (uses your BOOTH sign-in, never stored) |
 | `nativeMessaging` · `downloads` · `offscreen` | Requested only when turning on **AI connection** | Talk to the connector on this PC, download approved BOOTH files, and parse library pages that list download files. Released when AI connection is turned off |
 
 <details>

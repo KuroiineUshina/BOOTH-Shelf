@@ -7,6 +7,8 @@ const SOURCE_PATHS = Object.freeze({
   free: "/library/free_downloads",
 });
 const ORDERS_PATH = "/orders";
+const CARTS_PATH = "/carts";
+const WISHLIST_ITEMS_PATH = "/wish_list_name_items.json";
 
 function parseHttpsUrl(value, baseUrl) {
   if (typeof value !== "string" || !value.trim()) return null;
@@ -125,6 +127,47 @@ export function isAllowedOrdersUrl(value) {
   }
 
   return /^\/orders\/\d+\/?$/.test(url.pathname) && !url.search;
+}
+
+export function buildCartsPageUrl() {
+  return `${BOOTH_PRODUCT_ORIGIN}${CARTS_PATH}`;
+}
+
+export function buildCartsDataUrl(beforeCartId = null) {
+  const base = `${BOOTH_PRODUCT_ORIGIN}${CARTS_PATH}.json`;
+  return /^\d+$/.test(String(beforeCartId ?? "")) ? `${base}?lt_id=${beforeCartId}` : base;
+}
+
+export function isAllowedCartsDataUrl(value) {
+  const url = parseHttpsUrl(value, BOOTH_PRODUCT_ORIGIN);
+  if (!url || url.origin !== BOOTH_PRODUCT_ORIGIN || url.hash) return false;
+  if (url.pathname !== `${CARTS_PATH}.json`) return false;
+  const keys = [...url.searchParams.keys()];
+  if (!keys.length) return !url.search;
+  return keys.length === 1 && keys[0] === "lt_id" && /^\d+$/.test(url.searchParams.get("lt_id"));
+}
+
+export function isAllowedCartsPageUrl(value) {
+  const url = parseHttpsUrl(value, BOOTH_PRODUCT_ORIGIN);
+  return Boolean(url) && url.origin === BOOTH_PRODUCT_ORIGIN && url.pathname === CARTS_PATH && !url.search && !url.hash;
+}
+
+export function buildWishlistDataUrl(page = 1) {
+  const normalizedPage = Number.isSafeInteger(page) && page > 0 ? page : 1;
+  return `${BOOTH_ACCOUNTS_ORIGIN}${WISHLIST_ITEMS_PATH}?page=${normalizedPage}`;
+}
+
+export function isAllowedWishlistDataUrl(value) {
+  const url = parseHttpsUrl(value, BOOTH_ACCOUNTS_ORIGIN);
+  if (!url || url.origin !== BOOTH_ACCOUNTS_ORIGIN || url.hash) return false;
+  if (url.pathname !== WISHLIST_ITEMS_PATH) return false;
+  const keys = [...url.searchParams.keys()];
+  return keys.length === 1 && keys[0] === "page" && /^[1-9]\d*$/.test(url.searchParams.get("page"));
+}
+
+export function buildShopCartUrl(shopUrl) {
+  const url = parseHttpsUrl(sanitizeSellerUrl(shopUrl), BOOTH_PRODUCT_ORIGIN);
+  return url ? `${url.origin}/cart` : "";
 }
 
 export function buildSourcePageUrl(source, page = 1) {
