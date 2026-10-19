@@ -36,6 +36,7 @@ import {
   MAX_SIDEBAR_WIDTH,
   MIN_SIDEBAR_WIDTH,
   PREFERENCES_KEY,
+  SHOPPING_LISTS_KEY,
   SPENDING_SUMMARY_KEY,
   STORAGE_KEY,
   clearState,
@@ -44,6 +45,7 @@ import {
   encodeOrganizationBackup,
   isOwnStorageChange,
   loadPreferences,
+  loadShoppingLists,
   loadSpendingSummary,
   loadState,
   restoreOrganizationBackup,
@@ -51,6 +53,7 @@ import {
   runLibraryOperation,
   runSupportIndexOperation,
   sanitizeState,
+  saveShoppingList,
   saveSpendingSummary,
   updatePreferences,
   updateState,
@@ -206,9 +209,9 @@ const refs = Object.fromEntries(
     "red-pill-free-count", "red-pill-verdict", "red-pill-calculated-at",
     "red-pill-error", "red-pill-calculate",
     "main-content", "cart-nav", "cart-count", "wishlist-nav", "wishlist-count",
-    "cart-view", "cart-search-input", "cart-owned-option", "cart-refresh-label",
+    "cart-view", "cart-search-input", "cart-owned-option", "cart-sync-button", "all-sync-button",
     "wishlist-filters", "wishlist-include-cart", "wishlist-include-owned",
-    "cart-hide-owned", "cart-refresh", "cart-summary", "cart-shops", "cart-empty",
+    "cart-hide-owned", "cart-summary", "cart-shops", "cart-empty",
     "cart-empty-title", "cart-empty-description", "cart-empty-load", "cart-login-link",
   ].map((id) => [id, document.getElementById(id)]),
 );
@@ -549,7 +552,7 @@ async function runDemoSpending() {
 async function calculateSpending() {
   if (ui.calculatingSpending) return;
   if (ui.syncing) {
-    showRedPillError(new Error(t("전체 동기화가 끝난 뒤 계산해 주세요.")));
+    showRedPillError(new Error(t("구매 상품 동기화가 끝난 뒤 계산해 주세요.")));
     return;
   }
   ui.calculatingSpending = true;
@@ -2004,7 +2007,7 @@ function renderItems({ reconcile = false, animateLayout = false } = {}) {
 
   if (noStoredItems) {
     refs["empty-title"].textContent = t("라이브러리를 불러와 주세요");
-    refs["empty-description"].textContent = t("BOOTH에 로그인한 뒤 전체 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.");
+    refs["empty-description"].textContent = t("BOOTH에 로그인한 뒤 구매 상품 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.");
     refs["empty-sync-button"].hidden = false;
     refs["empty-login-link"].hidden = false;
   } else if (noResults) {
@@ -2063,7 +2066,7 @@ function renderHeader({ animateSortSwitch = null } = {}) {
   // The wishlist swaps its description for the Include buttons.
   refs["view-description"].hidden = ui.view === "wishlist";
   refs["wishlist-filters"].hidden = ui.view !== "wishlist";
-  refs["last-sync"].textContent = IS_DEMO ? t("미리보기 데이터") : formatSyncTime(state.lastSyncedAt);
+  renderSyncButtons();
   const kindLabel = t(ui.sortKind === "purchase" ? "구매순" : "이름순");
   const directionLabel = t(ui.sortDirection === "asc" ? "오름차순" : "내림차순");
   setSortSwitchValue(
@@ -2131,7 +2134,7 @@ const SHOPPING_VIEWS = Object.freeze({
       idleTitle: "장바구니를 불러와 주세요",
       idleDescription: "BOOTH에 로그인한 브라우저에서 장바구니에 담은 상품을 읽어옵니다.",
       loadButton: "장바구니 불러오기",
-      refreshButton: "장바구니 새로고침",
+      name: "장바구니",
       failedTitle: "장바구니를 불러오지 못했어요",
       emptyTitle: "장바구니가 비어 있어요",
       emptyDescription: "BOOTH에서 상품을 장바구니에 담으면 여기에 표시돼요.",
@@ -2156,7 +2159,7 @@ const SHOPPING_VIEWS = Object.freeze({
       idleTitle: "위시리스트를 불러와 주세요",
       idleDescription: "BOOTH에서 스키한 상품 중 아직 보유하지 않은 상품을 읽어옵니다.",
       loadButton: "위시리스트 불러오기",
-      refreshButton: "위시리스트 새로고침",
+      name: "위시리스트",
       failedTitle: "위시리스트를 불러오지 못했어요",
       emptyTitle: "아직 보유하지 않은 위시리스트 상품이 없어요",
       emptyDescription: "BOOTH에서 스키한 상품 중 라이브러리에 없는 상품이 여기에 표시돼요.",
@@ -2358,14 +2361,10 @@ function renderShoppingSummary(view, list, groups, { owned, inCart }) {
     if (hidesOwned(view) && !state.items.length) {
       parts.push(element("span", {
         className: "cart-summary-note",
-        text: t("라이브러리를 전체 동기화하면 이미 보유한 상품을 제외할 수 있어요."),
+        text: t("구매 상품 동기화를 하면 이미 보유한 상품을 제외할 수 있어요."),
       }));
     }
   }
-  parts.push(element("span", {
-    className: "cart-summary-time",
-    text: t("{time}에 불러옴", { time: formatLocalizedDate(new Date(list.loadedAt), { timeStyle: "short" }) }),
-  }));
   refs["cart-summary"].replaceChildren(...parts);
 }
 
@@ -2379,10 +2378,7 @@ function renderShoppingList() {
   const groups = visibleShoppingGroups(view, context);
 
   refs["cart-view"].setAttribute("aria-label", t(view === "cart" ? "장바구니" : "위시리스트"));
-  refs["cart-refresh-label"].textContent = t(config.text.refreshButton);
   refs["cart-empty-load"].textContent = t(config.text.loadButton);
-  refs["cart-refresh"].disabled = loading;
-  refs["cart-refresh"].classList.toggle("is-loading", loading);
   refs["cart-owned-option"].hidden = view !== "cart";
   refs["cart-hide-owned"].checked = ui.cartHideOwned;
   refs["wishlist-include-cart"].setAttribute("aria-pressed", String(ui.wishlistInclude.cart));
@@ -2413,6 +2409,7 @@ function renderShoppingList() {
   }
 
   renderShoppingSummary(view, list, groups, context);
+  renderSyncButtons();
   refs["cart-empty"].hidden = true;
   if (loading) return;
 
@@ -2439,6 +2436,20 @@ function setShoppingList(view, next) {
   shoppingLists = { ...shoppingLists, [view]: next };
 }
 
+function hasSavedShoppingList(list) {
+  return Boolean(list.loadedAt);
+}
+
+function applySavedShoppingLists(saved) {
+  for (const view of Object.keys(SHOPPING_VIEWS)) {
+    if (shoppingLists[view].status === "loading") continue;
+    const list = saved?.[view];
+    setShoppingList(view, list
+      ? { ...emptyShoppingList(), status: "ready", groups: list.groups, loadedAt: list.loadedAt }
+      : emptyShoppingList());
+  }
+}
+
 async function fetchShoppingList(view) {
   try {
     const result = await SHOPPING_VIEWS[view].load(({ pages, totalPages = 0 }) => {
@@ -2446,28 +2457,42 @@ async function fetchShoppingList(view) {
       if (ui.view === view) renderShoppingList();
     });
     setShoppingList(view, { ...emptyShoppingList(), status: "ready", groups: result.groups, loadedAt: result.loadedAt });
+    try {
+      await saveShoppingList(view, { groups: result.groups, loadedAt: result.loadedAt });
+    } catch (error) {
+      showToast(t("동기화한 목록을 저장하지 못했어요: {message}", { message: error.message }), "error");
+    }
   } catch (error) {
     const authError = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
-    setShoppingList(view, { ...emptyShoppingList(), status: authError ? "auth" : "error", error: t(error?.message || "") });
+    const message = authError ? t("이 브라우저에서 BOOTH에 로그인한 뒤 다시 불러와 주세요.") : t(error?.message || "");
+    const previous = shoppingLists[view];
+    if (hasSavedShoppingList(previous)) {
+      // Keep showing the last synced list; only this sync failed.
+      setShoppingList(view, { ...previous, status: "ready", pages: 0, totalPages: 0 });
+      showToast(t("{list} 동기화에 실패했어요: {message}", { list: t(SHOPPING_VIEWS[view].text.name), message }), "error");
+    } else {
+      setShoppingList(view, { ...emptyShoppingList(), status: authError ? "auth" : "error", error: message });
+    }
   }
   render();
 }
 
-async function loadShoppingList(view = ui.view) {
-  const config = SHOPPING_VIEWS[view];
-  if (!config || shoppingLists[view].status === "loading") return;
-  // The wishlist also needs the cart to leave out items already in it.
-  const companion = config.companion;
-  const views = companion && !["ready", "loading"].includes(shoppingLists[companion].status)
-    ? [view, companion]
-    : [view];
+// The wishlist also needs the cart to leave out items already in it.
+function viewsToLoad(view) {
+  const companion = SHOPPING_VIEWS[view].companion;
+  return companion && !hasSavedShoppingList(shoppingLists[companion]) ? [view, companion] : [view];
+}
+
+async function syncShoppingLists(requested, { access: grantedAccess } = {}) {
+  const views = [...new Set(requested)].filter((view) => shoppingLists[view].status !== "loading");
+  if (!views.length) return;
 
   if (IS_DEMO) {
-    for (const entry of views) {
-      setShoppingList(entry, {
+    for (const view of views) {
+      setShoppingList(view, {
         ...emptyShoppingList(),
         status: "ready",
-        groups: SHOPPING_VIEWS[entry].demo(),
+        groups: SHOPPING_VIEWS[view].demo(),
         loadedAt: new Date().toISOString(),
       });
     }
@@ -2476,13 +2501,13 @@ async function loadShoppingList(view = ui.view) {
   }
 
   // Ask once, before the first await, so Chrome still sees the click that started this.
-  const origins = [...new Set(views.map((entry) => SHOPPING_VIEWS[entry].permission))];
-  const access = typeof chrome !== "undefined" && chrome.permissions?.request
+  const origins = [...new Set(views.map((view) => SHOPPING_VIEWS[view].permission))];
+  const access = grantedAccess ?? (typeof chrome !== "undefined" && chrome.permissions?.request
     ? chrome.permissions.request({ origins })
-    : Promise.resolve(false);
+    : Promise.resolve(false));
   const previous = { ...shoppingLists };
-  for (const entry of views) {
-    setShoppingList(entry, { ...shoppingLists[entry], status: "loading", error: "", pages: 0, totalPages: 0 });
+  for (const view of views) {
+    setShoppingList(view, { ...shoppingLists[view], status: "loading", error: "", pages: 0, totalPages: 0 });
   }
   render();
 
@@ -2493,13 +2518,45 @@ async function loadShoppingList(view = ui.view) {
     granted = false;
   }
   if (!granted) {
-    setShoppingList(view, { ...emptyShoppingList(), status: "error", error: t(config.text.permission) });
-    if (views.length > 1) setShoppingList(companion, previous[companion]);
+    for (const view of views) {
+      setShoppingList(view, hasSavedShoppingList(previous[view])
+        ? previous[view]
+        : { ...emptyShoppingList(), status: "error", error: t(SHOPPING_VIEWS[view].text.permission) });
+    }
+    if (views.every((view) => hasSavedShoppingList(previous[view]))) {
+      showToast(t(SHOPPING_VIEWS[views[0]].text.permission), "error");
+    }
     render();
     return;
   }
 
-  await Promise.all(views.map((entry) => fetchShoppingList(entry)));
+  await Promise.all(views.map((view) => fetchShoppingList(view)));
+}
+
+// Sync all: purchases, cart and wishlist, behind one permission prompt.
+function syncEverything() {
+  const access = IS_DEMO ? undefined : requestBoothAccess({ productPages: true });
+  void syncLibrary({ access });
+  void syncShoppingLists(Object.keys(SHOPPING_VIEWS), { access });
+}
+
+// Each view gets its own sync button: purchases (library), cart, or everything (wishlist).
+function renderSyncButtons() {
+  const view = ui.view;
+  refs["sync-button"].hidden = view !== "library";
+  refs["cart-sync-button"].hidden = view !== "cart";
+  refs["all-sync-button"].hidden = view !== "wishlist";
+
+  const cartLoading = shoppingLists.cart.status === "loading";
+  const anyListLoading = Object.values(shoppingLists).some((list) => list.status === "loading");
+  refs["cart-sync-button"].disabled = cartLoading;
+  refs["cart-sync-button"].classList.toggle("is-syncing", cartLoading);
+  const allBusy = anyListLoading || ui.syncing;
+  refs["all-sync-button"].disabled = allBusy || ui.calculatingSpending;
+  refs["all-sync-button"].classList.toggle("is-syncing", allBusy);
+
+  const syncedAt = view === "library" ? state.lastSyncedAt : shoppingLists[view].loadedAt;
+  refs["last-sync"].textContent = IS_DEMO && view === "library" ? t("미리보기 데이터") : formatSyncTime(syncedAt);
 }
 
 function showShoppingList(view) {
@@ -2508,7 +2565,8 @@ function showShoppingList(view) {
   closeSidebar();
   render();
   animateLibraryHeading();
-  if (shoppingLists[view].status === "idle") void loadShoppingList(view);
+  // A saved list opens right away; only a list never synced is fetched now.
+  if (shoppingLists[view].status === "idle") void syncShoppingLists(viewsToLoad(view));
 }
 
 function captureViewportPosition() {
@@ -2811,7 +2869,7 @@ async function runDemoSync() {
   }
 }
 
-async function syncLibrary() {
+async function syncLibrary({ access } = {}) {
   if (ui.syncing || ui.indexingSupport) return;
   if (ui.calculatingSpending) {
     showToast(t("빨간약 계산이 끝난 뒤 동기화해 주세요."), "error");
@@ -2833,7 +2891,7 @@ async function syncLibrary() {
   let librarySynced = false;
   try {
     if (!IS_DEMO) {
-      const permissionGranted = await requestBoothAccess({ productPages: true });
+      const permissionGranted = await (access ?? requestBoothAccess({ productPages: true }));
       if (!permissionGranted) {
         const error = new Error(t("라이브러리와 상품 설명을 읽으려면 BOOTH 계정 및 상품 페이지 접근을 허용해 주세요."));
         error.code = "PERMISSION_REQUIRED";
@@ -2888,7 +2946,7 @@ async function syncLibrary() {
       detail: authError
         ? t("같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요.")
         : permissionError
-          ? t("전체 동기화를 다시 누르고 BOOTH 계정 및 상품 페이지 읽기 권한을 허용해 주세요.")
+          ? t("구매 상품 동기화를 다시 누르고 BOOTH 계정 및 상품 페이지 읽기 권한을 허용해 주세요.")
         : busyError
           ? t("진행 중인 작업이 끝난 뒤 다시 시도해 주세요.")
           : (error.message || t("잠시 후 다시 시도해 주세요.")),
@@ -2904,6 +2962,7 @@ async function syncLibrary() {
     refs["export-organization-data"].disabled = false;
     refs["import-organization-data"].disabled = false;
     refs["sync-button"].classList.remove("is-syncing");
+    renderSyncButtons();
   }
   if (librarySynced) startSupportIndexing();
 }
@@ -3742,8 +3801,9 @@ function bindEvents() {
       renderShoppingList();
     });
   }
-  refs["cart-refresh"].addEventListener("click", () => void loadShoppingList());
-  refs["cart-empty-load"].addEventListener("click", () => void loadShoppingList());
+  refs["cart-sync-button"].addEventListener("click", () => void syncShoppingLists(["cart"]));
+  refs["all-sync-button"].addEventListener("click", syncEverything);
+  refs["cart-empty-load"].addEventListener("click", () => void syncShoppingLists(viewsToLoad(ui.view)));
   refs["cart-search-input"].addEventListener("input", (event) => {
     ui.shoppingQuery[ui.view] = event.target.value;
     renderShoppingList();
@@ -3948,6 +4008,11 @@ function bindStorageChanges() {
         applyLayoutPreferences();
         if (preferences.locale !== previousLocale) renderPreservingViewport();
       }
+      if (Object.hasOwn(changes, SHOPPING_LISTS_KEY) && !isOwnStorageChange(changes[SHOPPING_LISTS_KEY].newValue)) {
+        // Another window synced (or deleted) the cart or wishlist.
+        applySavedShoppingLists(await loadShoppingLists());
+        render();
+      }
       if (Object.hasOwn(changes, SPENDING_SUMMARY_KEY) && !isOwnStorageChange(changes[SPENDING_SUMMARY_KEY].newValue)) {
         spendingSummary = await loadSpendingSummary();
         if (spendingSummary && refs["red-pill-dialog"].open) {
@@ -3977,11 +4042,14 @@ async function init() {
     spendingSummary = null;
   } else {
     await restrictStorageAccess();
-    [state, preferences, spendingSummary] = await Promise.all([
+    let savedShoppingLists;
+    [state, preferences, spendingSummary, savedShoppingLists] = await Promise.all([
       loadState(),
       loadPreferences(),
       loadSpendingSummary(),
+      loadShoppingLists(),
     ]);
+    applySavedShoppingLists(savedShoppingLists);
   }
   applyLocalePreference(preferences.locale);
   applyLayoutPreferences();

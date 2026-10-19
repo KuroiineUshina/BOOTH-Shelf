@@ -1104,7 +1104,7 @@ export async function loadBoothDownloadOptions(item) {
   }
 
   if (!found) {
-    const error = new Error(t("현재 페이지에서 상품을 찾지 못했어요. 전체 동기화 후 다시 시도해 주세요."));
+    const error = new Error(t("현재 페이지에서 상품을 찾지 못했어요. 구매 상품 동기화 후 다시 시도해 주세요."));
     error.code = "PRODUCT_NOT_FOUND";
     throw error;
   }

@@ -234,3 +234,63 @@ test("위시리스트는 모든 페이지를 순서대로 합치고, 로그아�
   globalThis.fetch = async (url) => respond(url, '{"error":"You need to sign in or sign up before continuing."}', 401);
   await assert.rejects(loadBoothWishlist(), BoothAuthError);
 });
+
+test("저장된 장바구니·위시리스트는 안전한 항목만 남기고 다시 읽는다", async () => {
+  const { clearState, loadShoppingLists, sanitizeShoppingLists, saveShoppingList, useMemoryStorage, SHOPPING_LISTS_VERSION } = await import("../src/storage.js");
+  useMemoryStorage({});
+
+  const cartGroups = parseBoothCartsData(JSON.stringify({
+    next_lt_id: null,
+    carts: [cartEntry({ id: 300, items: [cartItem({ id: 1, productId: 11 }), cartItem({ id: 2, productId: 12, quantity: 2, price: 990 })] })],
+  })).shops;
+  const wishItems = parseBoothWishlistData(wishPage([wishItem({ id: 21 }), wishItem({ id: 22, soldOut: true })], 1, 1)).items;
+  const loadedAt = "2026-10-18T08:00:00.000Z";
+
+  await saveShoppingList("cart", { groups: cartGroups, loadedAt });
+  await saveShoppingList("wishlist", { groups: [{ id: "wishlist", name: "", url: "", items: wishItems }], loadedAt });
+  const saved = await loadShoppingLists();
+
+  assert.equal(saved.cart.loadedAt, loadedAt);
+  assert.deepEqual(saved.cart.groups.map((group) => group.id), ["300"]);
+  assert.equal(saved.cart.groups[0].cartUrl, "https://maker.booth.pm/cart");
+  assert.deepEqual(saved.cart.groups[0].items.map((item) => [item.key, item.quantity, item.price]), [["cart:1", 1, 2500], ["cart:2", 2, 990]]);
+  assert.deepEqual(saved.wishlist.groups[0].items.map((item) => [item.key, item.priceFrom, item.unavailable]), [["wish:21", true, false], ["wish:22", true, true]]);
+  assert.equal(JSON.stringify(saved).includes("checkout"), false);
+
+  // Saving one list keeps the other.
+  await saveShoppingList("cart", { groups: [], loadedAt });
+  const afterCartSync = await loadShoppingLists();
+  assert.deepEqual(afterCartSync.cart.groups, []);
+  assert.equal(afterCartSync.wishlist.groups[0].items.length, 2);
+
+  const tampered = sanitizeShoppingLists({
+    version: SHOPPING_LISTS_VERSION,
+    cart: {
+      loadedAt,
+      groups: [{
+        id: "300",
+        name: "Shop",
+        url: "https://evil.example/",
+        items: [
+          { cartItemId: "5", productId: "55", title: "Item", productUrl: "javascript:alert(1)", imageUrl: "https://evil.example/i/55/a.jpg", price: -1, currency: "jpy", quantity: 1e9 },
+          { cartItemId: "x", productId: "56" },
+        ],
+      }, { id: "../etc", items: [] }],
+    },
+    wishlist: { loadedAt: "not a date", groups: [] },
+  });
+  const [item] = tampered.cart.groups[0].items;
+  assert.equal(tampered.cart.groups.length, 1);
+  assert.equal(tampered.cart.groups[0].url, "");
+  assert.equal(tampered.cart.groups[0].items.length, 1);
+  assert.equal(item.productUrl, "https://booth.pm/ja/items/55");
+  assert.equal(item.imageUrl, "");
+  assert.equal(item.price, 0);
+  assert.equal(item.currency, "JPY");
+  assert.equal(item.quantity, 1);
+  assert.equal(tampered.wishlist, null);
+  assert.deepEqual(sanitizeShoppingLists({ version: 999, cart: { loadedAt, groups: [] } }), { cart: null, wishlist: null });
+
+  await clearState();
+  assert.deepEqual(await loadShoppingLists(), { cart: null, wishlist: null });
+});

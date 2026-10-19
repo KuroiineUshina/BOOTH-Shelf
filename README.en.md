@@ -65,12 +65,12 @@ https://github.com/user-attachments/assets/f3fc61f1-6b18-4291-9339-c1505544dcab
 ### 🛒 Cart
 - Open **Cart** in the sidebar to see the items in your BOOTH cart grouped by shop, and search by title, seller, or option
 - Mark or hide items you already own, and see per-shop subtotals and the overall total
-- Cart contents stay in the page's memory and are never stored
+- The last synced cart is saved on this device so it opens right away; **Sync cart** refreshes just the cart
 
 ### ♡ Wishlist
 - Open **Wishlist** in the sidebar to see the items you liked (スキ) on BOOTH. Items you already own or have in your cart are hidden by default; turn on **Include cart** or **Include purchases** to show them
 - Search by title or seller; sold-out and discontinued items are marked
-- Wishlist contents also stay in the page's memory and are never stored
+- The wishlist's last sync is saved on this device too; the wishlist's **Sync all** refreshes purchases, cart, and wishlist together
 
 ### ⬇️ Downloads and navigation
 - Flip a card to see its download files and download the selected ones directly
@@ -108,7 +108,7 @@ https://github.com/user-attachments/assets/f3fc61f1-6b18-4291-9339-c1505544dcab
 
 1. Open the [BOOTH Shelf Chrome Web Store page](https://chromewebstore.google.com/detail/aibjhdieagkjmcodaiopaklonjbdmbpj?utm_source=item-share-cb) and click **Add to Chrome**.
 2. Sign in to your [BOOTH library](https://accounts.booth.pm/library) in the same browser profile.
-3. Click **BOOTH Shelf** in the toolbar and run **Sync all**.
+3. Click **BOOTH Shelf** in the toolbar and run **Sync purchases**.
 
 The Web Store version is updated automatically by the browser once a new version is approved. If the icon isn't visible, pin BOOTH Shelf from the browser's extensions menu.
 
@@ -122,7 +122,7 @@ The Web Store version is updated automatically by the browser once a new version
 5. Click **Load unpacked**.
 6. Select the extracted `booth-shelf` folder.
 7. Sign in to your [BOOTH library](https://accounts.booth.pm/library) in the same browser profile.
-8. Click **BOOTH Shelf** in the toolbar and run **Sync all**.
+8. Click **BOOTH Shelf** in the toolbar and run **Sync purchases**.
 
 An unpacked extension runs the JavaScript in the selected folder as-is. If you delete or move the folder, the extension stops loading, so keep it in a fixed location. If you use a synced folder such as OneDrive, don't share it with others and enable multi-factor authentication on the account.
 
@@ -162,8 +162,8 @@ There is no separate server or analytics; all data is stored only in this browse
 |---|---|---|
 | `storage` | Always | Store item info for search, plus favorites, categories, and folders on this device |
 | `unlimitedStorage` | Always | Lift the default 10 MB local storage limit for large libraries. Reads or sends no additional data |
-| `https://accounts.booth.pm/*` | Requested on first **Sync all**, **Reality check**, or **Wishlist** | Read the signed-in user's Library, Gifts, and Free downloads pages, payment amounts from order history when running **Reality check**, and your liked items when opening **Wishlist** |
-| `https://booth.pm/*` | Requested on first **Sync all** or **Cart** | Read public descriptions and linked item pages of owned items to find supported avatars (sends no login information), and read your cart (uses your BOOTH sign-in, never stored) |
+| `https://accounts.booth.pm/*` | Requested on first **Sync purchases**, **Reality check**, or **Wishlist** | Read the signed-in user's Library, Gifts, and Free downloads pages, payment amounts from order history when running **Reality check**, and your liked items when opening **Wishlist** |
+| `https://booth.pm/*` | Requested on first **Sync purchases** or **Cart** | Read public descriptions and linked item pages of owned items to find supported avatars (sends no login information), and read your cart (uses your BOOTH sign-in; checkout URLs are never stored) |
 | `nativeMessaging` · `downloads` · `offscreen` | Requested only when turning on **AI connection** | Talk to the connector on this PC, download approved BOOTH files, and parse library pages that list download files. Released when AI connection is turned off |
 
 <details>
@@ -196,9 +196,9 @@ See the [privacy notice](PRIVACY.md) (Korean) for details. Please don't post det
 - Deleting a folder moves its subfolders and the placements in that folder up one level, leaving the item's other placements intact. Deleting a top-level folder only removes that folder's placements.
 - Single-folder placement data and backup files from 1.0.5 and earlier are automatically converted to the multi-folder format on first load.
 - Sync stops if BOOTH's page structure changes or a maintenance page is returned. The item list is saved only after all purchased, gift, and free lists are checked; if checking fails, the existing list and organization data are kept.
-- **Sync all** reads purchased, gift, and free lists, download filenames and displayed sizes, and the supported-model section and base-avatar links in public item descriptions, saving them to a local search index. Full descriptions and link lists aren't stored — only the detected supported-avatar IDs. The app is usable as soon as the item list is saved; avatar detection continues in the background. Descriptions are read from BOOTH's lightweight public item JSON (`/items/<ID>.json`) instead of HTML pages. Each item's description index is reused for 30–45 days and saved incrementally, so later syncs don't re-request items already checked and rechecks don't all happen at once.
+- **Sync purchases** reads purchased, gift, and free lists, download filenames and displayed sizes, and the supported-model section and base-avatar links in public item descriptions, saving them to a local search index. Full descriptions and link lists aren't stored — only the detected supported-avatar IDs. The app is usable as soon as the item list is saved; avatar detection continues in the background. Descriptions are read from BOOTH's lightweight public item JSON (`/items/<ID>.json`) instead of HTML pages. Each item's description index is reused for 30–45 days and saved incrementally, so later syncs don't re-request items already checked and rechecks don't all happen at once.
 - Items whose description couldn't be read keep their existing support info and are rechecked on the next sync. Versions that change the description analysis also recheck older indexes.
-- Opening **Download** on a card re-reads the actual download URLs from the latest library page. URLs aren't stored and disappear when the page closes. If the item's position changed and the list can't be found, run **Sync all** and try again.
+- Opening **Download** on a card re-reads the actual download URLs from the latest library page. URLs aren't stored and disappear when the page closes. If the item's position changed and the list can't be found, run **Sync purchases** and try again.
 - Reality check de-duplicates orders confirmed as paid in your order history (`paid`, `completed`, or delivered) and sums the payment amount on each order's detail page. Unpaid, cancelled, and refunded orders are excluded; BOOST and shipping may be included; received gifts are excluded. To reduce server load, the result is cached locally and refreshed only when you click **Calculate again**.
 - Favorite, folder, and setting changes from multiple windows are applied in order against the latest saved value. A failed save is never shown as success.
 - If sync, Reality check, backup restore, or data deletion overlap across windows, the later operation stops and asks you to retry. Reality check doesn't overlap with other operations until its summary is saved.

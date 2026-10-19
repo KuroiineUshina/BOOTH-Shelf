@@ -166,7 +166,15 @@
           </div>
 
           <div class="hero-meta">
-            <button class="sync-button" id="sync-button" type="button" aria-label="전체 동기화" title="전체 동기화">
+            <button class="sync-button" id="sync-button" type="button" aria-label="구매 상품 동기화" title="구매 상품 동기화">
+              <span class="sync-symbol licon licon-refresh-cw" aria-hidden="true"></span>
+              <span class="button-label">구매 상품 동기화</span>
+            </button>
+            <button class="sync-button" id="cart-sync-button" type="button" aria-label="장바구니 동기화" title="장바구니 동기화" hidden>
+              <span class="sync-symbol licon licon-refresh-cw" aria-hidden="true"></span>
+              <span class="button-label">장바구니 동기화</span>
+            </button>
+            <button class="sync-button" id="all-sync-button" type="button" aria-label="전체 동기화: 구매 상품·장바구니·위시리스트" title="전체 동기화: 구매 상품·장바구니·위시리스트" hidden>
               <span class="sync-symbol licon licon-refresh-cw" aria-hidden="true"></span>
               <span class="button-label">전체 동기화</span>
             </button>
@@ -274,7 +282,7 @@
 
         <section class="empty-state" id="empty-state" hidden>
           <h2 id="empty-title">라이브러리를 불러와 주세요</h2>
-          <p id="empty-description">BOOTH에 로그인한 뒤 전체 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.</p>
+          <p id="empty-description">BOOTH에 로그인한 뒤 구매 상품 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.</p>
           <div class="empty-actions">
             <button class="primary-button" id="empty-sync-button" type="button">지금 전체 불러오기</button>
             <a class="secondary-button" id="empty-login-link" href="https://accounts.booth.pm/library" target="_blank" rel="noreferrer">BOOTH 로그인 열기</a>
@@ -301,10 +309,6 @@
               <input type="checkbox" id="cart-hide-owned">
               <span>이미 보유한 상품 숨기기</span>
             </label>
-            <button class="secondary-button cart-refresh" id="cart-refresh" type="button">
-              <span class="licon licon-refresh-cw" aria-hidden="true"></span>
-              <span id="cart-refresh-label">장바구니 새로고침</span>
-            </button>
           </div>
 
           <div class="cart-summary" id="cart-summary" role="status" aria-live="polite"></div>
