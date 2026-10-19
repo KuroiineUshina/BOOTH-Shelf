@@ -3,15 +3,22 @@ import {
   BOOTH_PRODUCT_ORIGIN,
   buildProductDataUrl,
   buildProductPageUrl,
+  buildCartsDataUrl,
+  buildCartsPageUrl,
   buildOrderDetailUrl,
   buildOrdersPageUrl,
+  buildShopCartUrl,
   buildSourcePageUrl,
+  buildWishlistDataUrl,
   getBoothOrderId,
   getBoothProductId,
+  isAllowedCartsDataUrl,
+  isAllowedCartsPageUrl,
   isAllowedLibraryUrl,
   isAllowedOrdersUrl,
   isAllowedProductDataUrl,
   isAllowedProductUrl,
+  isAllowedWishlistDataUrl,
   sanitizeDownloadUrl,
   sanitizeImageUrl,
   sanitizeProductUrl,
@@ -955,6 +962,62 @@ async function fetchProductData(url, productId) {
   return response.text();
 }
 
+async function fetchCartsResource(url, accept) {
+  if (!isAllowedCartsDataUrl(url) && !isAllowedCartsPageUrl(url)) {
+    throw new Error(t("허용되지 않은 BOOTH 장바구니 주소 요청을 차단했습니다."));
+  }
+
+  await waitForRequestSlot();
+  const response = await fetch(url, {
+    credentials: "include",
+    redirect: "follow",
+    cache: "no-store",
+    headers: { Accept: accept },
+  });
+
+  if (response.url.includes("/users/sign_in")) throw new BoothAuthError();
+  if (!isAllowedCartsDataUrl(response.url) && !isAllowedCartsPageUrl(response.url)) {
+    throw new Error(t("BOOTH가 예상하지 않은 주소로 이동해 응답을 차단했습니다."));
+  }
+  if (!response.ok) {
+    const error = new Error(t("BOOTH 응답 오류 ({status})", { status: response.status }));
+    error.status = response.status;
+    error.retryAfterMs = parseRetryAfter(response.headers.get("Retry-After"));
+    throw error;
+  }
+  return response.text();
+}
+
+async function fetchWishlistData(url) {
+  if (!isAllowedWishlistDataUrl(url)) {
+    throw new Error(t("허용되지 않은 BOOTH 위시리스트 주소 요청을 차단했습니다."));
+  }
+
+  await waitForRequestSlot();
+  const response = await fetch(url, {
+    credentials: "include",
+    redirect: "follow",
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+
+  // Signed-out visitors get a 401 JSON error instead of a redirect.
+  if (response.status === 401 || response.url.includes("/users/sign_in")) throw new BoothAuthError();
+  if (!isAllowedWishlistDataUrl(response.url)) {
+    throw new Error(t("BOOTH가 예상하지 않은 주소로 이동해 응답을 차단했습니다."));
+  }
+  if (!response.ok) {
+    const error = new Error(t("BOOTH 응답 오류 ({status})", { status: response.status }));
+    error.status = response.status;
+    error.retryAfterMs = parseRetryAfter(response.headers.get("Retry-After"));
+    throw error;
+  }
+  return response.text();
+}
+
+const fetchCartsData = (url) => fetchCartsResource(url, "application/json");
+const fetchCartsPage = (url) => fetchCartsResource(url, "text/html,application/xhtml+xml");
+
 function parseRetryAfter(value) {
   if (!value) return null;
 
@@ -1041,7 +1104,7 @@ export async function loadBoothDownloadOptions(item) {
   }
 
   if (!found) {
-    const error = new Error(t("현재 페이지에서 상품을 찾지 못했어요. 전체 동기화 후 다시 시도해 주세요."));
+    const error = new Error(t("현재 페이지에서 상품을 찾지 못했어요. 구매 상품 동기화 후 다시 시도해 주세요."));
     error.code = "PRODUCT_NOT_FOUND";
     throw error;
   }
@@ -1328,6 +1391,206 @@ export async function calculateBoothSpending(onProgress = () => {}) {
   });
 
   return summarizeBoothOrderDetails(details);
+}
+
+const MAX_CART_PAGES = 50;
+// carts.json only offers a small thumbnail; BOOTH serves the same image at 300x300.
+const CART_THUMBNAIL_SIZE = /\/c\/72x72_a2_g5\//u;
+
+function cartText(value, maxLength = 240) {
+  return String(value ?? "").replace(/\s+/gu, " ").trim().slice(0, maxLength);
+}
+
+function cartAmount(numberValue, label) {
+  if (Number.isFinite(numberValue) && numberValue >= 0) return numberValue;
+  const parsed = Number.parseFloat(String(label ?? "").replace(/[^\d.]/gu, ""));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function cartCurrency(label) {
+  return String(label ?? "").trim().match(/\b([A-Z]{3})$/u)?.[1] ?? "JPY";
+}
+
+function hasCartErrors(errors) {
+  return Boolean(errors) && typeof errors === "object" && Object.keys(errors).length > 0;
+}
+
+function parseCartItem(entry, shop) {
+  const product = entry?.item;
+  const productId = String(product?.id ?? "");
+  const cartItemId = String(entry?.id ?? "");
+  if (!/^\d+$/.test(productId) || !/^\d+$/.test(cartItemId)) return null;
+
+  const imageUrl = sanitizeImageUrl(String(product.primary_image || ""), productId);
+  const quantity = Number.isSafeInteger(entry.quantity) && entry.quantity > 0 ? entry.quantity : 1;
+  return {
+    key: `cart:${cartItemId}`,
+    cartItemId,
+    productId,
+    title: cartText(product.name) || t("이름 없는 상품"),
+    variationName: cartText(entry.variation?.name, 160),
+    price: cartAmount(product.number_price, product.price),
+    currency: cartCurrency(product.price),
+    quantity,
+    imageUrl: imageUrl.replace(CART_THUMBNAIL_SIZE, "/c/300x300_a2_g5/"),
+    productUrl: sanitizeProductUrl(String(product.url || ""), productId, BOOTH_PRODUCT_ORIGIN)
+      || buildProductPageUrl(productId),
+    productCategoryId: Number.isSafeInteger(product.category_id) ? product.category_id : null,
+    shopName: shop.name,
+    isGift: entry.is_gift === true,
+    unavailable: hasCartErrors(entry.errors),
+  };
+}
+
+/**
+ * Reads one page of https://booth.pm/carts.json. BOOTH groups the cart by shop
+ * (10 shops per page) and returns the id to continue from as next_lt_id.
+ * Checkout URLs carry a per-cart token and are intentionally dropped.
+ */
+export function parseBoothCartsData(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(t("BOOTH 장바구니 응답을 읽지 못했습니다."));
+  }
+  if (!data || !Array.isArray(data.carts)) {
+    throw new Error(t("BOOTH 장바구니 응답을 읽지 못했습니다."));
+  }
+
+  const shops = [];
+  for (const cart of data.carts) {
+    const id = String(cart?.id ?? "");
+    if (!/^\d+$/.test(id)) continue;
+    const url = sanitizeSellerUrl(String(cart.shop?.base_url || ""));
+    const shop = {
+      id,
+      name: cartText(cart.shop?.name, 120) || t("알 수 없는 판매자"),
+      url,
+      cartUrl: buildShopCartUrl(url),
+      subtotal: cartAmount(cart.number_subtotal, cart.subtotal),
+      currency: cartCurrency(cart.subtotal),
+      unavailable: hasCartErrors(cart.errors),
+      items: [],
+    };
+    for (const entry of Array.isArray(cart.cart_items) ? cart.cart_items : []) {
+      const item = parseCartItem(entry, shop);
+      if (item) shop.items.push(item);
+    }
+    if (shop.items.length) shops.push(shop);
+  }
+
+  const next = String(data.next_lt_id ?? "");
+  return { shops, nextCartId: /^\d+$/.test(next) ? next : null };
+}
+
+/** Reads BOOTH's own sign-in flag; null when the page does not carry it. */
+export function isBoothSignedInPage(html) {
+  const tag = String(html || "").match(/<meta\b[^>]*\bname=["']js_const_user_signed_in["'][^>]*>/iu)?.[0];
+  const value = tag?.match(/\bcontent=["'](true|false)["']/iu)?.[1]?.toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
+export async function loadBoothCart(onProgress = () => {}) {
+  const shops = new Map();
+  let nextCartId = null;
+  let pages = 0;
+
+  do {
+    const text = await fetchWithRetry(buildCartsDataUrl(nextCartId), 3, fetchCartsData);
+    const page = parseBoothCartsData(text);
+    pages += 1;
+    for (const shop of page.shops) {
+      if (!shops.has(shop.id)) shops.set(shop.id, shop);
+    }
+    onProgress({ pages, shopCount: shops.size });
+    // Stop if BOOTH ever hands back a cursor that does not move forward.
+    nextCartId = page.nextCartId && page.nextCartId !== nextCartId ? page.nextCartId : null;
+  } while (nextCartId && pages < MAX_CART_PAGES);
+
+  // A signed-out visitor also gets an empty cart, so confirm the session.
+  if (!shops.size) {
+    const html = await fetchWithRetry(buildCartsPageUrl(), 3, fetchCartsPage);
+    if (isBoothSignedInPage(html) === false) throw new BoothAuthError();
+  }
+
+  return { shops: [...shops.values()], loadedAt: new Date().toISOString() };
+}
+
+const MAX_WISHLIST_PAGES = 100;
+
+function parseWishlistItem(entry) {
+  const productId = String(entry?.id ?? "");
+  if (!/^\d+$/.test(productId) || entry.is_placeholder === true) return null;
+
+  const priceLabel = String(entry.price ?? "").trim();
+  const shopUrl = sanitizeSellerUrl(String(entry.shop?.url || ""));
+  const images = Array.isArray(entry.thumbnail_image_urls) ? entry.thumbnail_image_urls : [];
+  return {
+    key: `wish:${productId}`,
+    productId,
+    title: cartText(entry.name) || t("이름 없는 상품"),
+    variationName: "",
+    price: cartAmount(null, priceLabel),
+    currency: cartCurrency(priceLabel.replace(/~$/u, "").trim()),
+    // "700 JPY~" means the cheapest of several variations.
+    priceFrom: priceLabel.endsWith("~"),
+    quantity: 1,
+    imageUrl: sanitizeImageUrl(String(images[0] || ""), productId),
+    productUrl: sanitizeProductUrl(String(entry.shop_item_url || ""), productId, BOOTH_PRODUCT_ORIGIN)
+      || sanitizeProductUrl(String(entry.url || ""), productId, BOOTH_PRODUCT_ORIGIN)
+      || buildProductPageUrl(productId),
+    shopName: cartText(entry.shop?.name, 120) || t("알 수 없는 판매자"),
+    shopUrl,
+    isGift: false,
+    unavailable: entry.is_sold_out === true || entry.is_end_of_sale === true,
+  };
+}
+
+/** Reads one page of https://accounts.booth.pm/wish_list_name_items.json (20 items per page). */
+export function parseBoothWishlistData(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(t("BOOTH 위시리스트 응답을 읽지 못했습니다."));
+  }
+  if (!data || !Array.isArray(data.items)) {
+    throw new Error(t("BOOTH 위시리스트 응답을 읽지 못했습니다."));
+  }
+
+  const totalPages = Number.isSafeInteger(data.pagination?.total_pages) && data.pagination.total_pages > 0
+    ? data.pagination.total_pages
+    : 1;
+  return {
+    items: data.items.map(parseWishlistItem).filter(Boolean),
+    totalPages,
+    totalCount: Number.isSafeInteger(data.pagination?.total_count) ? data.pagination.total_count : null,
+  };
+}
+
+export async function loadBoothWishlist(onProgress = () => {}) {
+  const first = parseBoothWishlistData(await fetchWithRetry(buildWishlistDataUrl(1), 3, fetchWishlistData));
+  const totalPages = Math.min(first.totalPages, MAX_WISHLIST_PAGES);
+  let pagesCompleted = 1;
+  onProgress({ pages: pagesCompleted, totalPages });
+
+  const pageNumbers = Array.from({ length: totalPages - 1 }, (_, index) => index + 2);
+  const remaining = await runPool(pageNumbers, 2, async (page) => {
+    const parsed = parseBoothWishlistData(await fetchWithRetry(buildWishlistDataUrl(page), 3, fetchWishlistData));
+    pagesCompleted += 1;
+    onProgress({ pages: pagesCompleted, totalPages });
+    return parsed;
+  });
+
+  // An item can move between pages while we read them; keep its first position.
+  const items = new Map();
+  for (const item of [first, ...remaining].flatMap((page) => page.items)) {
+    if (!items.has(item.productId)) items.set(item.productId, item);
+  }
+  return { items: [...items.values()], loadedAt: new Date().toISOString() };
 }
 
 export async function syncBoothLibrary(onProgress = () => {}) {

@@ -1,4 +1,7 @@
 import {
+  BOOTH_PRODUCT_ORIGIN,
+  buildProductPageUrl,
+  buildShopCartUrl,
   sanitizeImageUrl,
   sanitizeProductUrl,
   sanitizeSellerUrl,
@@ -10,6 +13,8 @@ export const STORAGE_KEY = "boothShelfState";
 export const PREFERENCES_KEY = "boothShelfPreferences";
 export const SPENDING_SUMMARY_KEY = "boothShelfSpendingSummary";
 export const SPENDING_SUMMARY_VERSION = 3;
+export const SHOPPING_LISTS_KEY = "boothShelfShoppingLists";
+export const SHOPPING_LISTS_VERSION = 1;
 export const ORGANIZATION_BACKUP_FORMAT = "booth-shelf-organization";
 export const ORGANIZATION_BACKUP_VERSION = 4;
 export const DEFAULT_SIDEBAR_WIDTH = 272;
@@ -131,6 +136,86 @@ export function sanitizeSpendingSummary(value) {
     freeOrderCount: nonNegativeInteger(value.freeOrderCount),
     scannedAt,
   };
+}
+
+const SHOPPING_LIST_VIEWS = Object.freeze(["cart", "wishlist"]);
+const MAX_SHOPPING_GROUPS = 1_000;
+const MAX_SHOPPING_ITEMS = 10_000;
+
+function cleanAmount(value) {
+  return Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? value : 0;
+}
+
+function cleanCurrency(value) {
+  return typeof value === "string" && /^[A-Z]{3}$/.test(value) ? value : "JPY";
+}
+
+function sanitizeShoppingItem(value, view) {
+  if (!isRecord(value)) return null;
+  const productId = typeof value.productId === "string" && /^\d{1,20}$/.test(value.productId) ? value.productId : "";
+  if (!productId) return null;
+  const cartItemId = typeof value.cartItemId === "string" && /^\d{1,20}$/.test(value.cartItemId) ? value.cartItemId : "";
+  if (view === "cart" && !cartItemId) return null;
+
+  return {
+    key: view === "cart" ? `cart:${cartItemId}` : `wish:${productId}`,
+    ...(view === "cart" ? { cartItemId } : {}),
+    productId,
+    title: cleanString(value.title, 240, "BOOTH item"),
+    variationName: cleanString(value.variationName, 160),
+    price: cleanAmount(value.price),
+    currency: cleanCurrency(value.currency),
+    priceFrom: value.priceFrom === true,
+    quantity: Number.isSafeInteger(value.quantity) && value.quantity > 0 && value.quantity <= 999 ? value.quantity : 1,
+    imageUrl: sanitizeImageUrl(value.imageUrl, productId),
+    productUrl: sanitizeProductUrl(value.productUrl, productId, BOOTH_PRODUCT_ORIGIN) || buildProductPageUrl(productId),
+    productCategoryId: Number.isSafeInteger(value.productCategoryId) ? value.productCategoryId : null,
+    shopName: cleanString(value.shopName, 120),
+    shopUrl: sanitizeSellerUrl(value.shopUrl),
+    isGift: value.isGift === true,
+    unavailable: value.unavailable === true,
+  };
+}
+
+function sanitizeShoppingList(value, view) {
+  if (!isRecord(value) || !Array.isArray(value.groups)) return null;
+  const loadedAt = cleanDate(value.loadedAt);
+  if (!loadedAt) return null;
+
+  let itemCount = 0;
+  const groups = [];
+  for (const group of value.groups.slice(0, MAX_SHOPPING_GROUPS)) {
+    if (!isRecord(group) || !Array.isArray(group.items)) continue;
+    const id = view === "wishlist" ? "wishlist" : String(group.id ?? "");
+    if (view === "cart" && !/^\d{1,20}$/.test(id)) continue;
+    const url = view === "cart" ? sanitizeSellerUrl(group.url) : "";
+    const items = [];
+    for (const item of group.items) {
+      if (itemCount >= MAX_SHOPPING_ITEMS) break;
+      const sanitized = sanitizeShoppingItem(item, view);
+      if (!sanitized) continue;
+      items.push(sanitized);
+      itemCount += 1;
+    }
+    if (!items.length) continue;
+    groups.push({
+      id,
+      name: view === "cart" ? cleanString(group.name, 120) : "",
+      url,
+      cartUrl: buildShopCartUrl(url),
+      subtotal: cleanAmount(group.subtotal),
+      currency: cleanCurrency(group.currency),
+      unavailable: group.unavailable === true,
+      items,
+    });
+  }
+  return { groups, loadedAt };
+}
+
+/** The last synced cart and wishlist, so their views open without waiting for BOOTH. */
+export function sanitizeShoppingLists(value) {
+  const lists = isRecord(value) && value.version === SHOPPING_LISTS_VERSION ? value : {};
+  return Object.fromEntries(SHOPPING_LIST_VIEWS.map((view) => [view, sanitizeShoppingList(lists[view], view)]));
 }
 
 function isSafeId(value) {
@@ -520,7 +605,7 @@ export function restoreOrganizationBackup(currentValue, backupValue) {
     Object.keys(backupValue.data.assignments).map(normalizeStoredItemKey).filter(Boolean),
   );
   if (!currentState.items.length && (requestedFavorites.size || requestedAssignments.size)) {
-    throw new Error("상품 배치를 복원하려면 먼저 라이브러리를 전체 동기화해 주세요.");
+    throw new Error("상품 배치를 복원하려면 먼저 구매 상품 동기화를 실행해 주세요.");
   }
 
   const restoredState = sanitizeState({
@@ -557,12 +642,14 @@ function hasChromeStorage() {
 let memoryState = cloneDefaultState();
 let memoryPreferences = sanitizePreferences(null);
 let memorySpendingSummary = null;
+let memoryShoppingLists = null;
 
 export function useMemoryStorage(initialState) {
   memoryOnly = true;
   memoryState = sanitizeState(initialState);
   memoryPreferences = sanitizePreferences(null);
   memorySpendingSummary = null;
+  memoryShoppingLists = null;
 }
 
 export async function loadState() {
@@ -638,14 +725,36 @@ export function saveSpendingSummary(summary) {
   return withStorageLock(() => writeSpendingSummary(summary));
 }
 
+export async function loadShoppingLists() {
+  if (!hasChromeStorage()) return sanitizeShoppingLists(memoryShoppingLists);
+  const result = await chrome.storage.local.get(SHOPPING_LISTS_KEY);
+  return sanitizeShoppingLists(result[SHOPPING_LISTS_KEY]);
+}
+
+/** Replaces one view's saved list (cart or wishlist) and keeps the other. */
+export function saveShoppingList(view, list) {
+  if (!SHOPPING_LIST_VIEWS.includes(view)) throw new Error(`Unknown shopping list: ${view}`);
+  return withStorageLock(async () => {
+    const next = { ...(await loadShoppingLists()), [view]: sanitizeShoppingList(list, view) };
+    const stored = { version: SHOPPING_LISTS_VERSION, ...next };
+    if (!hasChromeStorage()) {
+      memoryShoppingLists = stored;
+    } else {
+      await chrome.storage.local.set({ [SHOPPING_LISTS_KEY]: { ...stored, _writerId: writerId } });
+    }
+    return next;
+  });
+}
+
 export async function clearState() {
   return withStorageLock(async () => {
     if (hasChromeStorage()) {
-      await chrome.storage.local.remove([STORAGE_KEY, PREFERENCES_KEY, SPENDING_SUMMARY_KEY]);
+      await chrome.storage.local.remove([STORAGE_KEY, PREFERENCES_KEY, SPENDING_SUMMARY_KEY, SHOPPING_LISTS_KEY]);
     }
     memoryState = cloneDefaultState();
     memoryPreferences = sanitizePreferences(null);
     memorySpendingSummary = null;
+    memoryShoppingLists = null;
     return cloneDefaultState();
   });
 }

@@ -25,6 +25,8 @@ import {
   BoothAuthError,
   calculateBoothSpending,
   indexBoothProductSupport,
+  loadBoothCart,
+  loadBoothWishlist,
   loadBoothDownloadOptions,
   syncBoothLibrary,
 } from "./booth.js";
@@ -34,6 +36,7 @@ import {
   MAX_SIDEBAR_WIDTH,
   MIN_SIDEBAR_WIDTH,
   PREFERENCES_KEY,
+  SHOPPING_LISTS_KEY,
   SPENDING_SUMMARY_KEY,
   STORAGE_KEY,
   clearState,
@@ -42,6 +45,7 @@ import {
   encodeOrganizationBackup,
   isOwnStorageChange,
   loadPreferences,
+  loadShoppingLists,
   loadSpendingSummary,
   loadState,
   restoreOrganizationBackup,
@@ -49,13 +53,14 @@ import {
   runLibraryOperation,
   runSupportIndexOperation,
   sanitizeState,
+  saveShoppingList,
   saveSpendingSummary,
   updatePreferences,
   updateState,
   useMemoryStorage,
 } from "./storage.js";
 import { startBoothDownload } from "./download.js";
-import { demoDownloadOptions, demoState } from "./demo.js";
+import { demoCart, demoDownloadOptions, demoState, demoWishlist } from "./demo.js";
 import { element, lucideIcon, setLucideIcon } from "./dom.js";
 import { productCategoryLabel } from "./product-categories.js";
 import { AI_BRIDGE_PERMISSIONS } from "./ai-bridge.js";
@@ -100,6 +105,11 @@ const THEME_ICONS = Object.freeze({
 const SYSTEM_THEME_MEDIA = window.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
 
 const ui = {
+  // "library" shows owned items; "cart" and "wishlist" show BOOTH lists that are never stored.
+  view: "library",
+  shoppingQuery: { cart: "", wishlist: "" },
+  wishlistInclude: { cart: false, owned: false },
+  cartHideOwned: false,
   source: "all",
   folderId: "all",
   favoritesOnly: false,
@@ -145,6 +155,8 @@ let loadMoreObserver;
 let themeSwitchFrame;
 let hasShownCards = false;
 let pendingOrganizationBackup = null;
+let shoppingLists = emptyShoppingLists();
+let renderedShoppingSignature = "";
 const downloadCardStates = new Map();
 const itemDrag = {
   itemKeys: [],
@@ -196,6 +208,11 @@ const refs = Object.fromEntries(
     "red-pill-other-currencies", "red-pill-order-count", "red-pill-average",
     "red-pill-free-count", "red-pill-verdict", "red-pill-calculated-at",
     "red-pill-error", "red-pill-calculate",
+    "main-content", "cart-nav", "cart-count", "wishlist-nav", "wishlist-count",
+    "cart-view", "cart-search-input", "cart-owned-option", "cart-sync-button", "all-sync-button",
+    "wishlist-filters", "wishlist-include-cart", "wishlist-include-owned",
+    "cart-hide-owned", "cart-summary", "cart-shops", "cart-empty",
+    "cart-empty-title", "cart-empty-description", "cart-empty-load", "cart-login-link",
   ].map((id) => [id, document.getElementById(id)]),
 );
 
@@ -535,7 +552,7 @@ async function runDemoSpending() {
 async function calculateSpending() {
   if (ui.calculatingSpending) return;
   if (ui.syncing) {
-    showRedPillError(new Error(t("전체 동기화가 끝난 뒤 계산해 주세요.")));
+    showRedPillError(new Error(t("구매 상품 동기화가 끝난 뒤 계산해 주세요.")));
     return;
   }
   ui.calculatingSpending = true;
@@ -704,6 +721,22 @@ function getSelectedCategory() {
 }
 
 function getViewCopy() {
+  if (ui.view === "cart") {
+    return {
+      eyebrow: t("BOOTH에서 살 예정"),
+      title: t("장바구니"),
+      description: t("BOOTH 장바구니에 담은 상품을 상점별로 모아봤어요."),
+    };
+  }
+
+  if (ui.view === "wishlist") {
+    return {
+      eyebrow: t("BOOTH에서 살 예정"),
+      title: t("위시리스트"),
+      description: t("BOOTH에서 스키한 상품 중 아직 보유하지 않은 상품만 모아봤어요."),
+    };
+  }
+
   if (ui.favoritesOnly) {
     return {
       eyebrow: t("빠르게 다시 찾기"),
@@ -780,15 +813,26 @@ function renderNavigation() {
   refs["favorites-count"].textContent = formatCount(favoriteCount);
   refs["unfiled-count"].textContent = formatCount(unfiledCount);
 
+  const inLibrary = ui.view === "library";
   document.querySelectorAll("[data-source]").forEach((button) => {
-    const active = !ui.favoritesOnly && ui.source === button.dataset.source;
+    const active = inLibrary && !ui.favoritesOnly && ui.source === button.dataset.source;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  refs["favorites-nav"].classList.toggle("is-active", ui.favoritesOnly);
-  refs["favorites-nav"].setAttribute("aria-pressed", String(ui.favoritesOnly));
-  refs["all-folders"].classList.toggle("is-active", ui.folderId === "all");
-  refs["unfiled-folder"].classList.toggle("is-active", ui.folderId === "unfiled");
+  refs["favorites-nav"].classList.toggle("is-active", inLibrary && ui.favoritesOnly);
+  refs["favorites-nav"].setAttribute("aria-pressed", String(inLibrary && ui.favoritesOnly));
+  const context = shoppingContext();
+  for (const [view, config] of Object.entries(SHOPPING_VIEWS)) {
+    const active = ui.view === view;
+    refs[config.nav].classList.toggle("is-active", active);
+    refs[config.nav].setAttribute("aria-pressed", String(active));
+    refs[config.count].hidden = shoppingLists[view].status !== "ready";
+    refs[config.count].textContent = formatCount(
+      shoppingItemCount(visibleShoppingGroups(view, context, { applyQuery: false })),
+    );
+  }
+  refs["all-folders"].classList.toggle("is-active", inLibrary && ui.folderId === "all");
+  refs["unfiled-folder"].classList.toggle("is-active", inLibrary && ui.folderId === "unfiled");
   refs["unfiled-folder"].classList.toggle("is-drop-success", ui.dropSuccessFolderId === "unfiled");
 }
 
@@ -1963,7 +2007,7 @@ function renderItems({ reconcile = false, animateLayout = false } = {}) {
 
   if (noStoredItems) {
     refs["empty-title"].textContent = t("라이브러리를 불러와 주세요");
-    refs["empty-description"].textContent = t("BOOTH에 로그인한 뒤 전체 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.");
+    refs["empty-description"].textContent = t("BOOTH에 로그인한 뒤 구매 상품 동기화를 누르면 구매 상품, 기프트와 무료 다운로드를 읽어옵니다.");
     refs["empty-sync-button"].hidden = false;
     refs["empty-login-link"].hidden = false;
   } else if (noResults) {
@@ -2019,7 +2063,10 @@ function renderHeader({ animateSortSwitch = null } = {}) {
   refs["view-eyebrow"].textContent = copy.eyebrow;
   refs["view-title"].textContent = copy.title;
   refs["view-description"].textContent = copy.description;
-  refs["last-sync"].textContent = IS_DEMO ? t("미리보기 데이터") : formatSyncTime(state.lastSyncedAt);
+  // The wishlist swaps its description for the Include buttons.
+  refs["view-description"].hidden = ui.view === "wishlist";
+  refs["wishlist-filters"].hidden = ui.view !== "wishlist";
+  renderSyncButtons();
   const kindLabel = t(ui.sortKind === "purchase" ? "구매순" : "이름순");
   const directionLabel = t(ui.sortDirection === "asc" ? "오름차순" : "내림차순");
   setSortSwitchValue(
@@ -2061,7 +2108,465 @@ function render({ reconcileItems = false, animateItems = false } = {}) {
   renderNavigation();
   renderFolders();
   renderHeader();
-  renderItems({ reconcile: reconcileItems, animateLayout: animateItems });
+  const inShoppingList = ui.view !== "library";
+  refs["main-content"].classList.toggle("is-cart-view", inShoppingList);
+  refs["cart-view"].hidden = !inShoppingList;
+  if (inShoppingList) renderShoppingList();
+  else renderItems({ reconcile: reconcileItems, animateLayout: animateItems });
+}
+
+// The cart and the wishlist share one view. Both live only in this page's memory;
+// status is idle, loading, ready, auth or error.
+const SHOPPING_VIEWS = Object.freeze({
+  cart: {
+    nav: "cart-nav",
+    count: "cart-count",
+    permission: BOOTH_PRODUCT_PERMISSION,
+    groupByShop: true,
+    async load(onProgress) {
+      const result = await loadBoothCart(onProgress);
+      return { groups: result.shops, loadedAt: result.loadedAt };
+    },
+    demo: () => demoCart(),
+    text: {
+      loading: "장바구니를 불러오는 중… ({pages}페이지)",
+      permission: "장바구니를 읽으려면 BOOTH 상품 페이지 접근 권한이 필요해요.",
+      idleTitle: "장바구니를 불러와 주세요",
+      idleDescription: "BOOTH에 로그인한 브라우저에서 장바구니에 담은 상품을 읽어옵니다.",
+      loadButton: "장바구니 불러오기",
+      name: "장바구니",
+      failedTitle: "장바구니를 불러오지 못했어요",
+      emptyTitle: "장바구니가 비어 있어요",
+      emptyDescription: "BOOTH에서 상품을 장바구니에 담으면 여기에 표시돼요.",
+    },
+  },
+  wishlist: {
+    nav: "wishlist-nav",
+    count: "wishlist-count",
+    permission: BOOTH_ACCOUNT_PERMISSION,
+    groupByShop: false,
+    // Owned and in-cart items are hidden unless the Include buttons are on; reading
+    // the cart too lets the wishlist leave those out.
+    companion: "cart",
+    async load(onProgress) {
+      const result = await loadBoothWishlist(onProgress);
+      return { groups: [wishlistGroup(result.items)], loadedAt: result.loadedAt };
+    },
+    demo: () => [wishlistGroup(demoWishlist())],
+    text: {
+      loading: "위시리스트를 불러오는 중… ({pages}/{totalPages}페이지)",
+      permission: "위시리스트를 읽으려면 BOOTH 계정 페이지 접근 권한이 필요해요.",
+      idleTitle: "위시리스트를 불러와 주세요",
+      idleDescription: "BOOTH에서 스키한 상품 중 아직 보유하지 않은 상품을 읽어옵니다.",
+      loadButton: "위시리스트 불러오기",
+      name: "위시리스트",
+      failedTitle: "위시리스트를 불러오지 못했어요",
+      emptyTitle: "아직 보유하지 않은 위시리스트 상품이 없어요",
+      emptyDescription: "BOOTH에서 스키한 상품 중 라이브러리에 없는 상품이 여기에 표시돼요.",
+    },
+  },
+});
+
+function emptyShoppingList() {
+  return { status: "idle", groups: [], loadedAt: null, error: "", pages: 0, totalPages: 0 };
+}
+
+function emptyShoppingLists() {
+  return { cart: emptyShoppingList(), wishlist: emptyShoppingList() };
+}
+
+function wishlistGroup(items) {
+  return { id: "wishlist", name: "", url: "", cartUrl: "", items };
+}
+
+function shoppingItemCount(groups) {
+  return groups.reduce((count, group) => count + group.items.length, 0);
+}
+
+function shoppingTotals(groups) {
+  const totals = new Map();
+  for (const item of groups.flatMap((group) => group.items)) {
+    totals.set(item.currency, (totals.get(item.currency) || 0) + item.price * item.quantity);
+  }
+  return totals;
+}
+
+function formatShoppingTotals(totals) {
+  if (!totals.size) return formatMoney(0);
+  return [...totals].map(([currency, amount]) => formatMoney(amount, currency)).join(" + ");
+}
+
+function ownedProductIds() {
+  return new Set(state.items.map((item) => String(item.productId)));
+}
+
+function cartProductIds() {
+  return new Set(shoppingLists.cart.groups.flatMap((group) => group.items.map((item) => item.productId)));
+}
+
+// What the list rows are compared against: owned library items and items already in the cart.
+function shoppingContext() {
+  return { owned: ownedProductIds(), inCart: cartProductIds() };
+}
+
+function hidesOwned(view) {
+  return view === "wishlist" ? !ui.wishlistInclude.owned : ui.cartHideOwned;
+}
+
+function hidesInCart(view) {
+  return view === "wishlist" && !ui.wishlistInclude.cart;
+}
+
+function visibleShoppingGroups(view, { owned, inCart }, { applyQuery = true } = {}) {
+  const query = applyQuery ? ui.shoppingQuery[view].trim().toLocaleLowerCase() : "";
+  const hideOwned = hidesOwned(view);
+  const hideInCart = hidesInCart(view);
+  return shoppingLists[view].groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        if (hideOwned && owned.has(item.productId)) return false;
+        if (hideInCart && inCart.has(item.productId)) return false;
+        if (!query) return true;
+        return [item.title, item.variationName, item.shopName]
+          .some((value) => value.toLocaleLowerCase().includes(query));
+      }),
+    }))
+    .filter((group) => group.items.length);
+}
+
+function createShoppingLink(url, className, children) {
+  const link = element(url ? "a" : "span", {
+    className,
+    attrs: url ? { href: url, target: "_blank", rel: "noopener noreferrer" } : {},
+  });
+  link.append(...children);
+  return link;
+}
+
+function createShoppingItem(item, { owned, inCart }, { showShop, markInCart }) {
+  const isOwned = owned.has(item.productId);
+  const row = element("li", { className: "cart-item" });
+  row.classList.toggle("is-owned", isOwned);
+  row.classList.toggle("is-unavailable", item.unavailable);
+
+  const thumb = createShoppingLink(item.productUrl, "cart-thumb", item.imageUrl
+    ? [element("img", { attrs: { src: item.imageUrl, alt: "", loading: "lazy", decoding: "async" } })]
+    : [lucideIcon("shopping-cart")]);
+  thumb.setAttribute("tabindex", "-1");
+  thumb.setAttribute("aria-hidden", "true");
+
+  const body = element("div", { className: "cart-item-body" });
+  body.append(createShoppingLink(item.productUrl, "cart-item-title", [document.createTextNode(item.title)]));
+  if (showShop) {
+    body.append(createShoppingLink(item.shopUrl, "cart-item-shop", [document.createTextNode(item.shopName)]));
+  }
+  if (item.variationName) body.append(element("p", { className: "cart-item-variation", text: item.variationName }));
+
+  const badges = [];
+  if (isOwned) badges.push(element("span", { className: "cart-badge is-owned", text: t("이미 보유") }));
+  if (markInCart && inCart.has(item.productId)) {
+    badges.push(element("span", { className: "cart-badge is-in-cart", text: t("장바구니에 있음") }));
+  }
+  if (item.isGift) badges.push(element("span", { className: "cart-badge", text: t("기프트로 구매") }));
+  if (item.unavailable) badges.push(element("span", { className: "cart-badge is-warning", text: t("구매 불가") }));
+  if (badges.length) {
+    const badgeRow = element("div", { className: "cart-item-badges" });
+    badgeRow.append(...badges);
+    body.append(badgeRow);
+  }
+
+  const price = element("div", { className: "cart-item-price" });
+  const amount = formatMoney(item.price * item.quantity, item.currency);
+  price.append(element("strong", { text: item.priceFrom ? t("{price}부터", { price: amount }) : amount }));
+  if (item.quantity > 1) {
+    price.append(element("span", {
+      text: t("{price} {quantity}개", { price: formatMoney(item.price, item.currency), quantity: item.quantity }),
+    }));
+  }
+
+  row.append(thumb, body, price);
+  return row;
+}
+
+function createShoppingGroup(group, context, { groupByShop }) {
+  const section = element("section", { className: "cart-shop" });
+  if (groupByShop) {
+    const header = element("header", { className: "cart-shop-header" });
+    header.append(
+      createShoppingLink(group.url, "cart-shop-name", [document.createTextNode(group.name)]),
+      element("span", { className: "cart-shop-subtotal", text: formatShoppingTotals(shoppingTotals([group])) }),
+    );
+    if (group.cartUrl) {
+      header.append(createShoppingLink(group.cartUrl, "cart-shop-checkout", [
+        document.createTextNode(t("BOOTH에서 열기")),
+        lucideIcon("external-link"),
+      ]));
+    }
+    section.append(header);
+  }
+  const list = element("ul", { className: "cart-items" });
+  list.append(...group.items.map((item) => createShoppingItem(item, context, {
+    showShop: !groupByShop,
+    markInCart: !groupByShop,
+  })));
+  section.append(list);
+  return section;
+}
+
+function renderShoppingEmpty({ title, description, showLoad = false, showLogin = false }) {
+  refs["cart-empty"].hidden = false;
+  refs["cart-empty-title"].textContent = title;
+  refs["cart-empty-description"].textContent = description;
+  refs["cart-empty-load"].hidden = !showLoad;
+  refs["cart-login-link"].hidden = !showLogin;
+}
+
+function renderShoppingSummary(view, list, groups, { owned, inCart }) {
+  const { text } = SHOPPING_VIEWS[view];
+  if (list.status === "loading") {
+    refs["cart-summary"].textContent = t(text.loading, { pages: list.pages, totalPages: list.totalPages || "?" });
+    return;
+  }
+  if (list.status !== "ready" || !list.groups.length) {
+    refs["cart-summary"].textContent = "";
+    return;
+  }
+
+  const ownedCount = list.groups.flatMap((group) => group.items).filter((item) => owned.has(item.productId)).length;
+  const parts = [];
+  if (view === "cart") {
+    parts.push(element("strong", { text: formatShoppingTotals(shoppingTotals(groups)) }));
+    parts.push(document.createTextNode(` · ${t("{items}개 상품, {shops}개 상점", {
+      items: formatCount(shoppingItemCount(groups)),
+      shops: formatCount(groups.length),
+    })}`));
+    if (ownedCount) parts.push(document.createTextNode(` · ${t("이미 보유 {count}개", { count: formatCount(ownedCount) })}`));
+  } else {
+    const items = list.groups.flatMap((group) => group.items);
+    const inCartCount = items.filter((item) => inCart.has(item.productId)).length;
+    parts.push(element("strong", { text: t("{items}개 상품", { items: formatCount(shoppingItemCount(groups)) }) }));
+    if (ownedCount && hidesOwned(view)) {
+      parts.push(document.createTextNode(` · ${t("보유한 상품 {count}개 제외", { count: formatCount(ownedCount) })}`));
+    }
+    if (inCartCount && hidesInCart(view)) {
+      parts.push(document.createTextNode(` · ${t("장바구니 상품 {count}개 제외", { count: formatCount(inCartCount) })}`));
+    }
+    if (hidesInCart(view) && shoppingLists.cart.status !== "ready" && shoppingLists.cart.status !== "loading") {
+      parts.push(element("span", {
+        className: "cart-summary-note",
+        text: t("장바구니를 불러오지 못해 장바구니 상품은 제외하지 않았어요."),
+      }));
+    }
+    if (hidesOwned(view) && !state.items.length) {
+      parts.push(element("span", {
+        className: "cart-summary-note",
+        text: t("구매 상품 동기화를 하면 이미 보유한 상품을 제외할 수 있어요."),
+      }));
+    }
+  }
+  refs["cart-summary"].replaceChildren(...parts);
+}
+
+function renderShoppingList() {
+  const view = ui.view;
+  const config = SHOPPING_VIEWS[view];
+  const list = shoppingLists[view];
+  const loading = list.status === "loading";
+  const context = shoppingContext();
+  const { owned, inCart } = context;
+  const groups = visibleShoppingGroups(view, context);
+
+  refs["cart-view"].setAttribute("aria-label", t(view === "cart" ? "장바구니" : "위시리스트"));
+  refs["cart-empty-load"].textContent = t(config.text.loadButton);
+  refs["cart-owned-option"].hidden = view !== "cart";
+  refs["cart-hide-owned"].checked = ui.cartHideOwned;
+  refs["wishlist-include-cart"].setAttribute("aria-pressed", String(ui.wishlistInclude.cart));
+  refs["wishlist-include-owned"].setAttribute("aria-pressed", String(ui.wishlistInclude.owned));
+  if (refs["cart-search-input"].value !== ui.shoppingQuery[view]) {
+    refs["cart-search-input"].value = ui.shoppingQuery[view];
+  }
+
+  // Storage writes (e.g. background support indexing) re-render often; rebuilding the
+  // list mid-click would swap the link under the pointer and swallow the click.
+  const signature = JSON.stringify([
+    view,
+    list.status,
+    list.loadedAt,
+    ui.shoppingQuery[view],
+    hidesOwned(view),
+    hidesInCart(view),
+    getLocale(),
+    list.groups.flatMap((group) => group.items.map((item) => (
+      (owned.has(item.productId) ? 1 : 0) + (inCart.has(item.productId) ? 2 : 0)
+    ))).join(""),
+  ]);
+  if (signature !== renderedShoppingSignature) {
+    refs["cart-shops"].replaceChildren(
+      ...groups.map((group) => createShoppingGroup(group, context, { groupByShop: config.groupByShop })),
+    );
+    renderedShoppingSignature = signature;
+  }
+
+  renderShoppingSummary(view, list, groups, context);
+  renderSyncButtons();
+  refs["cart-empty"].hidden = true;
+  if (loading) return;
+
+  const { text } = config;
+  if (list.status === "idle") {
+    renderShoppingEmpty({ title: t(text.idleTitle), description: t(text.idleDescription), showLoad: true });
+  } else if (list.status === "auth") {
+    renderShoppingEmpty({
+      title: t("BOOTH 로그인이 필요해요"),
+      description: t("이 브라우저에서 BOOTH에 로그인한 뒤 다시 불러와 주세요."),
+      showLoad: true,
+      showLogin: true,
+    });
+  } else if (list.status === "error") {
+    renderShoppingEmpty({ title: t(text.failedTitle), description: list.error, showLoad: true });
+  } else if (!visibleShoppingGroups(view, context, { applyQuery: false }).length) {
+    renderShoppingEmpty({ title: t(text.emptyTitle), description: t(text.emptyDescription) });
+  } else if (!groups.length) {
+    renderShoppingEmpty({ title: t("조건에 맞는 상품이 없어요"), description: t("검색어나 필터를 바꾸면 다른 상품을 찾을 수 있어요.") });
+  }
+}
+
+function setShoppingList(view, next) {
+  shoppingLists = { ...shoppingLists, [view]: next };
+}
+
+function hasSavedShoppingList(list) {
+  return Boolean(list.loadedAt);
+}
+
+function applySavedShoppingLists(saved) {
+  for (const view of Object.keys(SHOPPING_VIEWS)) {
+    if (shoppingLists[view].status === "loading") continue;
+    const list = saved?.[view];
+    setShoppingList(view, list
+      ? { ...emptyShoppingList(), status: "ready", groups: list.groups, loadedAt: list.loadedAt }
+      : emptyShoppingList());
+  }
+}
+
+async function fetchShoppingList(view) {
+  try {
+    const result = await SHOPPING_VIEWS[view].load(({ pages, totalPages = 0 }) => {
+      setShoppingList(view, { ...shoppingLists[view], pages, totalPages });
+      if (ui.view === view) renderShoppingList();
+    });
+    setShoppingList(view, { ...emptyShoppingList(), status: "ready", groups: result.groups, loadedAt: result.loadedAt });
+    try {
+      await saveShoppingList(view, { groups: result.groups, loadedAt: result.loadedAt });
+    } catch (error) {
+      showToast(t("동기화한 목록을 저장하지 못했어요: {message}", { message: error.message }), "error");
+    }
+  } catch (error) {
+    const authError = error instanceof BoothAuthError || error?.code === "AUTH_REQUIRED";
+    const message = authError ? t("이 브라우저에서 BOOTH에 로그인한 뒤 다시 불러와 주세요.") : t(error?.message || "");
+    const previous = shoppingLists[view];
+    if (hasSavedShoppingList(previous)) {
+      // Keep showing the last synced list; only this sync failed.
+      setShoppingList(view, { ...previous, status: "ready", pages: 0, totalPages: 0 });
+      showToast(t("{list} 동기화에 실패했어요: {message}", { list: t(SHOPPING_VIEWS[view].text.name), message }), "error");
+    } else {
+      setShoppingList(view, { ...emptyShoppingList(), status: authError ? "auth" : "error", error: message });
+    }
+  }
+  render();
+}
+
+// The wishlist also needs the cart to leave out items already in it.
+function viewsToLoad(view) {
+  const companion = SHOPPING_VIEWS[view].companion;
+  return companion && !hasSavedShoppingList(shoppingLists[companion]) ? [view, companion] : [view];
+}
+
+async function syncShoppingLists(requested, { access: grantedAccess } = {}) {
+  const views = [...new Set(requested)].filter((view) => shoppingLists[view].status !== "loading");
+  if (!views.length) return;
+
+  if (IS_DEMO) {
+    for (const view of views) {
+      setShoppingList(view, {
+        ...emptyShoppingList(),
+        status: "ready",
+        groups: SHOPPING_VIEWS[view].demo(),
+        loadedAt: new Date().toISOString(),
+      });
+    }
+    render();
+    return;
+  }
+
+  // Ask once, before the first await, so Chrome still sees the click that started this.
+  const origins = [...new Set(views.map((view) => SHOPPING_VIEWS[view].permission))];
+  const access = grantedAccess ?? (typeof chrome !== "undefined" && chrome.permissions?.request
+    ? chrome.permissions.request({ origins })
+    : Promise.resolve(false));
+  const previous = { ...shoppingLists };
+  for (const view of views) {
+    setShoppingList(view, { ...shoppingLists[view], status: "loading", error: "", pages: 0, totalPages: 0 });
+  }
+  render();
+
+  let granted = false;
+  try {
+    granted = await access;
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    for (const view of views) {
+      setShoppingList(view, hasSavedShoppingList(previous[view])
+        ? previous[view]
+        : { ...emptyShoppingList(), status: "error", error: t(SHOPPING_VIEWS[view].text.permission) });
+    }
+    if (views.every((view) => hasSavedShoppingList(previous[view]))) {
+      showToast(t(SHOPPING_VIEWS[views[0]].text.permission), "error");
+    }
+    render();
+    return;
+  }
+
+  await Promise.all(views.map((view) => fetchShoppingList(view)));
+}
+
+// Sync all: purchases, cart and wishlist, behind one permission prompt.
+function syncEverything() {
+  const access = IS_DEMO ? undefined : requestBoothAccess({ productPages: true });
+  void syncLibrary({ access });
+  void syncShoppingLists(Object.keys(SHOPPING_VIEWS), { access });
+}
+
+// Each view gets its own sync button: purchases (library), cart, or everything (wishlist).
+function renderSyncButtons() {
+  const view = ui.view;
+  refs["sync-button"].hidden = view !== "library";
+  refs["cart-sync-button"].hidden = view !== "cart";
+  refs["all-sync-button"].hidden = view !== "wishlist";
+
+  const cartLoading = shoppingLists.cart.status === "loading";
+  const anyListLoading = Object.values(shoppingLists).some((list) => list.status === "loading");
+  refs["cart-sync-button"].disabled = cartLoading;
+  refs["cart-sync-button"].classList.toggle("is-syncing", cartLoading);
+  const allBusy = anyListLoading || ui.syncing;
+  refs["all-sync-button"].disabled = allBusy || ui.calculatingSpending;
+  refs["all-sync-button"].classList.toggle("is-syncing", allBusy);
+
+  const syncedAt = view === "library" ? state.lastSyncedAt : shoppingLists[view].loadedAt;
+  refs["last-sync"].textContent = IS_DEMO && view === "library" ? t("미리보기 데이터") : formatSyncTime(syncedAt);
+}
+
+function showShoppingList(view) {
+  selectedItemKeys.clear();
+  ui.view = view;
+  closeSidebar();
+  render();
+  animateLibraryHeading();
+  // A saved list opens right away; only a list never synced is fetched now.
+  if (shoppingLists[view].status === "idle") void syncShoppingLists(viewsToLoad(view));
 }
 
 function captureViewportPosition() {
@@ -2164,6 +2669,7 @@ function animateLibraryHeading() {
 
 function setSource(source) {
   selectedItemKeys.clear();
+  ui.view = "library";
   ui.source = source;
   ui.favoritesOnly = false;
   ui.folderId = "all";
@@ -2177,6 +2683,7 @@ function setSource(source) {
 
 function selectFolder(folderId) {
   selectedItemKeys.clear();
+  ui.view = "library";
   ui.folderId = folderId;
   ui.selectedFolderId = folderId === "all" || folderId === "unfiled" ? null : folderId;
   ui.selectedCategoryId = null;
@@ -2190,6 +2697,7 @@ function selectFolder(folderId) {
 function resetLibraryView() {
   selectedItemKeys.clear();
   Object.assign(ui, {
+    view: "library",
     source: "all",
     folderId: "all",
     favoritesOnly: false,
@@ -2361,7 +2869,7 @@ async function runDemoSync() {
   }
 }
 
-async function syncLibrary() {
+async function syncLibrary({ access } = {}) {
   if (ui.syncing || ui.indexingSupport) return;
   if (ui.calculatingSpending) {
     showToast(t("빨간약 계산이 끝난 뒤 동기화해 주세요."), "error");
@@ -2383,7 +2891,7 @@ async function syncLibrary() {
   let librarySynced = false;
   try {
     if (!IS_DEMO) {
-      const permissionGranted = await requestBoothAccess({ productPages: true });
+      const permissionGranted = await (access ?? requestBoothAccess({ productPages: true }));
       if (!permissionGranted) {
         const error = new Error(t("라이브러리와 상품 설명을 읽으려면 BOOTH 계정 및 상품 페이지 접근을 허용해 주세요."));
         error.code = "PERMISSION_REQUIRED";
@@ -2438,7 +2946,7 @@ async function syncLibrary() {
       detail: authError
         ? t("같은 브라우저 프로필에서 BOOTH에 로그인한 뒤 다시 시도해 주세요.")
         : permissionError
-          ? t("전체 동기화를 다시 누르고 BOOTH 계정 및 상품 페이지 읽기 권한을 허용해 주세요.")
+          ? t("구매 상품 동기화를 다시 누르고 BOOTH 계정 및 상품 페이지 읽기 권한을 허용해 주세요.")
         : busyError
           ? t("진행 중인 작업이 끝난 뒤 다시 시도해 주세요.")
           : (error.message || t("잠시 후 다시 시도해 주세요.")),
@@ -2454,6 +2962,7 @@ async function syncLibrary() {
     refs["export-organization-data"].disabled = false;
     refs["import-organization-data"].disabled = false;
     refs["sync-button"].classList.remove("is-syncing");
+    renderSyncButtons();
   }
   if (librarySynced) startSupportIndexing();
 }
@@ -2558,6 +3067,7 @@ async function confirmOrganizationRestore(event) {
     await runLibraryOperation(() => persistState((latest) => restoreOrganizationBackup(latest, backup).state));
     pendingOrganizationBackup = null;
     selectedItemKeys.clear();
+    ui.view = "library";
     ui.folderId = "all";
     ui.selectedFolderId = null;
     ui.selectedCategoryId = null;
@@ -2590,6 +3100,7 @@ async function confirmDataDelete(event) {
     applyLocalePreference(preferences.locale);
     applyLayoutPreferences();
     downloadCardStates.clear();
+    shoppingLists = emptyShoppingLists();
     refs["data-delete-dialog"].close();
     setSyncPanel({ hidden: true });
     resetLibraryView();
@@ -3269,6 +3780,7 @@ function bindEvents() {
     button.addEventListener("click", () => setSource(button.dataset.source));
   });
   refs["favorites-nav"].addEventListener("click", () => {
+    ui.view = "library";
     ui.favoritesOnly = true;
     ui.source = "all";
     ui.folderId = "all";
@@ -3278,6 +3790,28 @@ function bindEvents() {
     closeSidebar();
     render({ reconcileItems: true, animateItems: true });
     animateLibraryHeading();
+  });
+
+  refs["cart-nav"].addEventListener("click", () => showShoppingList("cart"));
+  refs["wishlist-nav"].addEventListener("click", () => showShoppingList("wishlist"));
+  for (const [key, id] of [["cart", "wishlist-include-cart"], ["owned", "wishlist-include-owned"]]) {
+    refs[id].addEventListener("click", () => {
+      ui.wishlistInclude = { ...ui.wishlistInclude, [key]: !ui.wishlistInclude[key] };
+      renderNavigation();
+      renderShoppingList();
+    });
+  }
+  refs["cart-sync-button"].addEventListener("click", () => void syncShoppingLists(["cart"]));
+  refs["all-sync-button"].addEventListener("click", syncEverything);
+  refs["cart-empty-load"].addEventListener("click", () => void syncShoppingLists(viewsToLoad(ui.view)));
+  refs["cart-search-input"].addEventListener("input", (event) => {
+    ui.shoppingQuery[ui.view] = event.target.value;
+    renderShoppingList();
+  });
+  refs["cart-hide-owned"].addEventListener("change", (event) => {
+    ui.cartHideOwned = event.target.checked;
+    renderNavigation();
+    renderShoppingList();
   });
 
   refs["all-folders"].addEventListener("click", () => selectFolder("all"));
@@ -3430,7 +3964,7 @@ function bindEvents() {
     const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
     if (event.key === "/" && !isTyping) {
       event.preventDefault();
-      refs["search-input"].focus();
+      refs[ui.view === "library" ? "search-input" : "cart-search-input"].focus();
     }
     if (event.key === "Escape") {
       if (closeContextMenu({ restoreFocus: true })) {
@@ -3474,6 +4008,11 @@ function bindStorageChanges() {
         applyLayoutPreferences();
         if (preferences.locale !== previousLocale) renderPreservingViewport();
       }
+      if (Object.hasOwn(changes, SHOPPING_LISTS_KEY) && !isOwnStorageChange(changes[SHOPPING_LISTS_KEY].newValue)) {
+        // Another window synced (or deleted) the cart or wishlist.
+        applySavedShoppingLists(await loadShoppingLists());
+        render();
+      }
       if (Object.hasOwn(changes, SPENDING_SUMMARY_KEY) && !isOwnStorageChange(changes[SPENDING_SUMMARY_KEY].newValue)) {
         spendingSummary = await loadSpendingSummary();
         if (spendingSummary && refs["red-pill-dialog"].open) {
@@ -3503,11 +4042,14 @@ async function init() {
     spendingSummary = null;
   } else {
     await restrictStorageAccess();
-    [state, preferences, spendingSummary] = await Promise.all([
+    let savedShoppingLists;
+    [state, preferences, spendingSummary, savedShoppingLists] = await Promise.all([
       loadState(),
       loadPreferences(),
       loadSpendingSummary(),
+      loadShoppingLists(),
     ]);
+    applySavedShoppingLists(savedShoppingLists);
   }
   applyLocalePreference(preferences.locale);
   applyLayoutPreferences();

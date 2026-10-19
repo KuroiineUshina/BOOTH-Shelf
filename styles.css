@@ -70,6 +70,7 @@
 .licon::before { display: block; }
 .licon-layout-grid::before { content: "\e0ff"; }
 .licon-shopping-bag::before { content: "\e15b"; }
+.licon-shopping-cart::before { content: "\e15c"; }
 .licon-gift::before { content: "\e0e1"; }
 .licon-star::before { content: "\e176"; }
 .licon-plus::before { content: "\e13d"; }
@@ -560,6 +561,62 @@ a.item-title:hover { color: var(--accent); }
 .item-visual > img, .placeholder-letter { transition: transform var(--motion-enter) var(--ease-enter); }
 .selection-check { transition: transform var(--motion-feedback) var(--ease-enter); }
 .empty-state:not([hidden]) { animation: panelReveal var(--motion-enter) var(--ease-enter); }
+/* Cart view: BOOTH cart items grouped by shop, shown instead of the library grid. */
+.main-panel.is-cart-view .library-toolbar,
+.main-panel.is-cart-view .result-toolbar,
+.main-panel.is-cart-view .item-grid,
+.main-panel.is-cart-view #empty-state,
+.main-panel.is-cart-view .load-more-sentinel { display: none !important; }
+.cart-view { display: flex; flex-direction: column; gap: 20px; }
+.cart-view[hidden] { display: none; }
+.cart-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.cart-search { flex: 1 1 260px; background: var(--surface-subtle); }
+.cart-search:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.cart-owned-toggle { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-soft); font-size: 0.8125rem; cursor: pointer; }
+.cart-owned-toggle input { width: 16px; height: 16px; accent-color: var(--action-brand); }
+.sync-button[hidden] { display: none; }
+.cart-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; min-height: 24px; color: var(--ink-soft); font-size: 0.875rem; }
+.cart-summary strong { color: var(--ink); font-size: 1.125rem; }
+.cart-shops { display: flex; flex-direction: column; gap: var(--space-4); }
+.cart-shop { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
+.cart-shop-header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-4); padding: 12px 16px; background: var(--surface-subtle); border-bottom: 1px solid var(--line); }
+.cart-shop-name { flex: 1 1 auto; min-width: 0; color: var(--ink); font-size: 0.875rem; font-weight: 700; text-decoration: none; overflow-wrap: anywhere; }
+a.cart-shop-name:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.cart-shop-subtotal { color: var(--ink); font-size: 0.875rem; font-weight: 700; }
+.cart-shop-checkout { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 0.75rem; text-decoration: none; }
+.cart-shop-checkout:hover { text-decoration: underline; text-underline-offset: 3px; }
+.cart-items { margin: 0; padding: 0; list-style: none; }
+.cart-item { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; gap: var(--space-4); padding: 12px 16px; }
+.cart-item + .cart-item { border-top: 1px solid var(--line); }
+.cart-item.is-owned .cart-thumb, .cart-item.is-unavailable .cart-thumb { opacity: 0.55; }
+.cart-thumb { display: grid; place-items: center; width: 72px; height: 72px; border-radius: var(--radius-sm); background: var(--surface-strong); color: var(--ink-muted); font-size: 1.5rem; overflow: hidden; }
+.cart-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.cart-item-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cart-item-title { color: var(--ink); font-size: 0.875rem; font-weight: 500; line-height: 1.5; text-decoration: none; overflow-wrap: anywhere; }
+a.cart-item-title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.cart-item-shop { color: var(--ink-soft); font-size: 0.75rem; text-decoration: none; overflow-wrap: anywhere; }
+a.cart-item-shop:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.cart-summary-note { flex-basis: 100%; color: var(--ink-muted); font-size: 0.75rem; }
+.cart-owned-toggle[hidden] { display: none; }
+.wishlist-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: 12px; }
+.wishlist-filters[hidden] { display: none; }
+.filter-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 14px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); color: var(--ink-soft); font-size: 0.8125rem; transition: background var(--motion-feedback) var(--ease-feedback), color var(--motion-feedback) var(--ease-feedback), border-color var(--motion-feedback) var(--ease-feedback); }
+.filter-chip:hover { background: var(--surface-strong); color: var(--ink); }
+.filter-chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.filter-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.cart-badge.is-in-cart { background: var(--accent-soft); color: var(--accent); }
+.cart-item-variation { margin: 0; color: var(--ink-muted); font-size: 0.75rem; overflow-wrap: anywhere; }
+.cart-item-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.cart-badge { padding: 2px 8px; border-radius: 999px; background: var(--surface-strong); color: var(--ink-soft); font-size: 0.6875rem; font-weight: 700; }
+.cart-badge.is-owned { background: var(--success-soft); color: var(--success); }
+.cart-badge.is-warning { background: var(--danger-soft); color: var(--danger); }
+.cart-item-price { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; font-size: 0.875rem; }
+.cart-item-price span { color: var(--ink-muted); font-size: 0.75rem; }
+@media (max-width: 540px) {
+  .cart-item { grid-template-columns: 56px minmax(0, 1fr); padding: 12px; }
+  .cart-thumb { width: 56px; height: 56px; }
+  .cart-item-price { grid-column: 2; flex-direction: row; align-items: baseline; gap: var(--space-2); }
+}
 @media (hover: hover) and (pointer: fine) {
   body:not(.is-item-dragging) .item-card:not(.is-flipped):not(.is-multi-selected):hover .item-card-front { transform: translateY(-3px); }
   body:not(.is-item-dragging) .item-card:not(.is-flipped):hover .item-visual { box-shadow: 0 8px 22px rgba(25, 34, 49, 0.09); }

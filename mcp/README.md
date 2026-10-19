@@ -6,7 +6,7 @@ Connects AI tools (Claude Code, Codex, any MCP client) to your own BOOTH library
 
 ## 설치
 
-필요한 것: Node.js 18 이상, Chrome·Edge 등 Chromium 브라우저에 설치한 BOOTH Shelf 1.0.12 이상, 전체 동기화를 한 번 끝낸 라이브러리.
+필요한 것: Node.js 18 이상, Chrome·Edge 등 Chromium 브라우저에 설치한 BOOTH Shelf 1.0.12 이상, 구매 상품 동기화를 한 번 끝낸 라이브러리.
 
 1. 연결 프로그램을 설치합니다. 현재 사용자 영역에만 등록하므로 관리자 권한이 필요 없습니다. Windows에서는 **시작 메뉴에서 연 터미널이나 PowerShell**에서 실행하세요. Claude Desktop처럼 스토어(MSIX) 앱 안의 터미널에서 실행하면 Windows가 설치 내용을 그 앱 전용 공간으로 옮겨 Chrome이 찾지 못하므로, 설치 프로그램이 이를 감지하면 아무것도 설치하지 않고 안내합니다.
    ```bash
