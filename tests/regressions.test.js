@@ -402,7 +402,7 @@ test("자신의 파일명 저장 이벤트와 다른 창의 폴더 변경은 열
 });
 
 test("지원 정보 저장 중 바뀐 파일명·즐겨찾기·폴더 배치를 이전 스냅샷으로 덮지 않는다", () => {
-  const app = appContext(["mergeSupportIndex", "mergeSyncedItems"]);
+  const app = domain;
   const original = sampleState();
   const indexed = original.items.map((item) => ({ ...item, supportedAvatarIds: ["misaki"], supportIndexVersion: 2 }));
   const latest = {

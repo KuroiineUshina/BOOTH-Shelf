@@ -16,6 +16,12 @@ const MAX_DOWNLOAD_FILES = 30;
 const DOWNLOAD_WAIT_MS = 40_000;
 const DOWNLOAD_POLL_MS = 1_000;
 const MAX_FINISHED_JOBS = 20;
+const SYNC_WAIT_MS = 90_000;
+const SYNC_POLL_MS = 500;
+// Repeated sync requests within this window return the last result instead
+// of reading every BOOTH library page again.
+const SYNC_COOLDOWN_MS = 60_000;
+const MAX_REPORTED_NEW_ITEMS = 20;
 const SOURCES = Object.freeze(["all", "purchased", "gift", "free"]);
 
 export class AiBridgeError extends Error {
@@ -96,18 +102,28 @@ export function createAiBridge({
   getDownload,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = () => Date.now(),
+  syncLibrary = async () => {
+    throw new AiBridgeError("UNSUPPORTED", "Library sync is not available.");
+  },
   extensionVersion = "",
   downloadWaitMs = DOWNLOAD_WAIT_MS,
   downloadPollMs = DOWNLOAD_POLL_MS,
+  syncWaitMs = SYNC_WAIT_MS,
+  syncPollMs = SYNC_POLL_MS,
+  syncCooldownMs = SYNC_COOLDOWN_MS,
 }) {
   const jobs = new Map();
   let jobSequence = 0;
+  let syncJob = null;
 
   async function findItem(productId) {
     const state = await loadState();
     const item = state.items.find((entry) => entry.productId === productId);
     if (!item) {
-      throw new AiBridgeError("NOT_FOUND", `Item ${productId} is not in the synced BOOTH library.`);
+      throw new AiBridgeError(
+        "NOT_FOUND",
+        `Item ${productId} is not in the synced BOOTH library. If the user just bought or received it, call booth_sync to refresh the library, then try again.`,
+      );
     }
     return { state, item };
   }
@@ -121,7 +137,57 @@ export function createAiBridge({
       lastSyncedAt: state.lastSyncedAt,
       itemsWithType: state.items.filter((item) => item.productCategory).length,
       itemsWithSupportedAvatars: state.items.filter((item) => item.supportedAvatarIds?.length).length,
+      sync: syncJob ? syncSnapshot(syncJob) : null,
     };
+  }
+
+  function syncSnapshot(job) {
+    const result = job.result;
+    return {
+      status: job.status,
+      startedAt: new Date(job.startedAt).toISOString(),
+      finishedAt: job.finishedAt ? new Date(job.finishedAt).toISOString() : null,
+      ...(result ? {
+        itemCount: result.itemCount,
+        lastSyncedAt: result.syncedAt,
+        newItemCount: result.newItems.length,
+        newItems: result.newItems.slice(0, MAX_REPORTED_NEW_ITEMS),
+        removedItemCount: result.removedCount,
+        downloadFileCount: result.downloadFileCount,
+        supportedAvatarIndex: result.supportIndex,
+      } : {}),
+      error: job.error || null,
+    };
+  }
+
+  function startSync() {
+    const job = { status: "running", startedAt: now(), finishedAt: null, result: null, error: null };
+    syncJob = job;
+    syncLibrary()
+      .then((result) => {
+        job.result = result;
+        job.status = "complete";
+      })
+      .catch((error) => {
+        job.status = "failed";
+        job.error = { code: error?.code || "ERROR", message: error?.message || String(error) };
+      })
+      .finally(() => {
+        job.finishedAt = now();
+      });
+    return job;
+  }
+
+  // Reads every library, gift and free-download page again, like the Full sync
+  // button. Only one sync runs at a time; a request made during a sync waits
+  // for that one.
+  async function sync() {
+    let job = syncJob;
+    const recent = job?.status === "complete" && now() - job.finishedAt < syncCooldownMs;
+    if (!job || (job.finishedAt && !recent)) job = startSync();
+    const deadline = now() + syncWaitMs;
+    while (!job.finishedAt && now() < deadline) await sleep(syncPollMs);
+    return syncSnapshot(job);
   }
 
   async function searchLibrary(params = {}) {
@@ -314,6 +380,7 @@ export function createAiBridge({
 
   const methods = {
     status,
+    sync,
     search_library: searchLibrary,
     list_files: listFiles,
     download,

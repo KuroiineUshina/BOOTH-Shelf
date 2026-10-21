@@ -32,7 +32,7 @@ function libraryState() {
   });
 }
 
-function createHarness({ approve = true, downloadState = "complete", askApproval = true } = {}) {
+function createHarness({ approve = true, downloadState = "complete", askApproval = true, syncLibrary } = {}) {
   const calls = { approvals: [], downloads: [], loads: [] };
   let clock = 0;
   const bridge = createAiBridge({
@@ -64,9 +64,13 @@ function createHarness({ approve = true, downloadState = "complete", askApproval
     now: () => clock,
     downloadWaitMs: 5_000,
     downloadPollMs: 1_000,
+    syncWaitMs: 5_000,
+    syncPollMs: 500,
+    syncCooldownMs: 60_000,
+    ...(syncLibrary ? { syncLibrary } : {}),
     extensionVersion: "1.0.12",
   });
-  return { bridge, calls };
+  return { bridge, calls, advance: (ms) => { clock += ms; } };
 }
 
 test("AI 검색은 아바타·종류로 찾고 다운로드 주소 없이 요약 정보만 돌려준다", async () => {
@@ -103,7 +107,7 @@ test("AI 요청 값은 엄격히 검사하고 알 수 없는 메서드를 거부
   await assert.rejects(bridge.handle("search_library", { query: 3 }), { code: "INVALID_PARAMS" });
   await assert.rejects(bridge.handle("search_library", []), { code: "INVALID_PARAMS" });
   await assert.rejects(bridge.handle("list_files", { productId: "../1" }), { code: "INVALID_PARAMS" });
-  await assert.rejects(bridge.handle("list_files", { productId: "999" }), { code: "NOT_FOUND" });
+  await assert.rejects(bridge.handle("list_files", { productId: "999" }), { code: "NOT_FOUND", message: /booth_sync/ });
   await assert.rejects(bridge.handle("constructor", {}), { code: "UNKNOWN_METHOD" });
   await assert.rejects(bridge.handle("download", { items: [] }), { code: "INVALID_PARAMS" });
   await assert.rejects(bridge.handle("download", { items: [{ productId: "101", fileIds: ["nope"] }] }), { code: "NOT_FOUND" });
@@ -183,4 +187,70 @@ test("다운로드 경로 조각은 Windows에서 안전한 이름으로 바꾼�
     buildDownloadFilename({ productId: "5", title: "A/B", sellerName: "" }, "f.zip"),
     "BOOTH Shelf/shop/A_B (5)/f.zip",
   );
+});
+
+test("동기화 요청은 보관함을 새로 읽고 새로 추가된 상품을 알려 준다", async () => {
+  let runs = 0;
+  const { bridge, advance } = createHarness({
+    syncLibrary: async () => {
+      runs += 1;
+      return {
+        itemCount: 3,
+        syncedAt: "2026-10-21T03:00:00.000Z",
+        downloadFileCount: 4,
+        newItems: [{ productId: "3484218", title: "Free Pack", shop: "Room", sources: ["free"] }],
+        removedCount: 0,
+        supportIndex: "running",
+      };
+    },
+  });
+  const first = await bridge.handle("sync", {});
+  assert.equal(first.status, "complete");
+  assert.equal(first.itemCount, 3);
+  assert.equal(first.newItemCount, 1);
+  assert.equal(first.newItems[0].productId, "3484218");
+  assert.equal(first.supportedAvatarIndex, "running");
+  assert.equal((await bridge.handle("status", {})).sync.status, "complete");
+
+  // A repeat within the cooldown returns the same result without another sync.
+  await bridge.handle("sync", {});
+  assert.equal(runs, 1);
+  advance(61_000);
+  await bridge.handle("sync", {});
+  assert.equal(runs, 2);
+});
+
+test("동기화가 오래 걸리면 진행 중으로 답하고, 그동안 온 요청은 같은 작업을 기다린다", async () => {
+  let runs = 0;
+  let finish;
+  const { bridge } = createHarness({
+    syncLibrary: () => {
+      runs += 1;
+      return new Promise((resolve) => { finish = resolve; });
+    },
+  });
+  const pending = await bridge.handle("sync", {});
+  assert.equal(pending.status, "running");
+  assert.equal((await bridge.handle("sync", {})).status, "running");
+  assert.equal(runs, 1);
+  finish({ itemCount: 2, syncedAt: "2026-10-21T03:00:00.000Z", downloadFileCount: 2, newItems: [], removedCount: 0, supportIndex: "running" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const status = await bridge.handle("status", {});
+  assert.equal(status.sync.status, "complete");
+  assert.equal(status.sync.newItemCount, 0);
+});
+
+test("동기화 실패는 오류 코드와 함께 알려 주고 다음 요청에서 다시 시도한다", async () => {
+  let runs = 0;
+  const { bridge } = createHarness({
+    syncLibrary: async () => {
+      runs += 1;
+      throw Object.assign(new Error("Log in to BOOTH in this browser profile, then try again."), { code: "AUTH_REQUIRED" });
+    },
+  });
+  const failed = await bridge.handle("sync", {});
+  assert.equal(failed.status, "failed");
+  assert.deepEqual(failed.error, { code: "AUTH_REQUIRED", message: "Log in to BOOTH in this browser profile, then try again." });
+  await bridge.handle("sync", {});
+  assert.equal(runs, 2);
 });

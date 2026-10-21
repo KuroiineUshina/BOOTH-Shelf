@@ -12,6 +12,8 @@ import {
   getItemFolderIds,
   itemHasSource,
   matchingDownloadFiles,
+  mergeSupportIndex,
+  mergeSyncedItems,
   moveFolder,
   renameCategory,
   renameFolder,
@@ -2228,51 +2230,6 @@ function setSyncPanel({ message, detail = "", percent = 0, tone = "default", log
   refs["sync-detail"].textContent = detail;
   refs["sync-progress"].style.width = `${Math.max(0, Math.min(100, percent))}%`;
   refs["login-link"].hidden = !login;
-}
-
-function mergeSyncedItems(previousState, items, syncedAt) {
-  const previousItems = new Map(previousState.items.map((item) => [item.key, item]));
-  const mergedItems = items.map((item) => {
-    const previous = previousItems.get(item.key);
-    if (!previous?.supportIndexedAt) return item;
-    return {
-      ...item,
-      supportedAvatarIds: [...(previous.supportedAvatarIds || [])],
-      supportIndexedAt: previous.supportIndexedAt,
-      supportIndexVersion: previous.supportIndexVersion,
-      productCategory: previous.productCategory ?? null,
-    };
-  });
-  const keys = new Set(mergedItems.map((item) => item.key));
-  return {
-    ...previousState,
-    items: mergedItems,
-    lastSyncedAt: syncedAt,
-    favorites: previousState.favorites.filter((key) => keys.has(key)),
-    assignments: Object.fromEntries(
-      Object.keys(previousState.assignments).map((key) => [
-        key,
-        getItemFolderIds(previousState.assignments, key).filter(
-          (folderId) => previousState.folders.some((folder) => folder.id === folderId),
-        ),
-      ]).filter(([key, folderIds]) => keys.has(key) && folderIds.length),
-    ),
-  };
-}
-
-function mergeSupportIndex(currentItems, indexedItems) {
-  const indexedByKey = new Map(indexedItems.map((item) => [item.key, item]));
-  return currentItems.map((item) => {
-    const indexed = indexedByKey.get(item.key);
-    if (!indexed) return item;
-    return {
-      ...item,
-      supportedAvatarIds: indexed.supportedAvatarIds,
-      supportIndexedAt: indexed.supportIndexedAt,
-      supportIndexVersion: indexed.supportIndexVersion,
-      productCategory: indexed.productCategory ?? item.productCategory ?? null,
-    };
-  });
 }
 
 function hideSyncPanelLater() {

@@ -662,7 +662,37 @@ function readProductIdentity(documentNode) {
 
 // BOOTH's public item JSON carries the same plain-text description (with product
 // URLs inline) as the HTML page at a tenth of the size and without DOM parsing.
-export function parseBoothProductData(text, { productId }) {
+const MAX_FREE_DOWNLOAD_FILES = 200;
+
+// Free-download variations list their files in the public item JSON; the free
+// downloads library page has no download buttons for them.
+export function extractFreeDownloadOptions(data) {
+  const options = [];
+  const seen = new Set();
+  const variations = Array.isArray(data?.variations) ? data.variations : [];
+  for (const variation of variations) {
+    if (variation?.status !== "free_download" || !variation.downloadable) continue;
+    const files = [
+      ...(Array.isArray(variation.downloadable.no_musics) ? variation.downloadable.no_musics : []),
+      ...(Array.isArray(variation.downloadable.musics) ? variation.downloadable.musics : []),
+    ];
+    for (const file of files) {
+      const url = sanitizeDownloadUrl(file?.url, BOOTH_PRODUCT_ORIGIN);
+      if (!url || seen.has(url) || options.length >= MAX_FREE_DOWNLOAD_FILES) continue;
+      seen.add(url);
+      const name = normalizeText(typeof file.name === "string" ? file.name : "");
+      options.push({
+        id: new URL(url).pathname.match(/\/downloadables\/(\d+)/)?.[1] || String(options.length + 1),
+        label: (name || t("다운로드 파일 {number}", { number: options.length + 1 })).slice(0, 240),
+        detail: normalizeText(typeof file.file_size === "string" ? file.file_size : "").slice(0, 40),
+        url,
+      });
+    }
+  }
+  return options;
+}
+
+function readProductData(text, productId) {
   let data;
   try {
     data = JSON.parse(text);
@@ -675,7 +705,11 @@ export function parseBoothProductData(text, { productId }) {
     error.code = "PRODUCT_DATA_INVALID";
     throw error;
   }
+  return data;
+}
 
+export function parseBoothProductData(text, { productId }) {
+  const data = readProductData(text, productId);
   const description = data.description.trim().slice(0, 40_000);
   const shopName = typeof data.shop?.name === "string" ? data.shop.name : "";
   const categoryId = Number(data.category?.id);
@@ -691,6 +725,7 @@ export function parseBoothProductData(text, { productId }) {
     : null;
   return {
     category,
+    freeDownloads: extractFreeDownloadOptions(data),
     support: {
       descriptionFound: Boolean(description),
       ...extractProductSupportSignals(description),
@@ -993,6 +1028,11 @@ async function fetchWithRetry(url, attempts = 3, fetcher = fetchHtml) {
   throw lastError;
 }
 
+async function loadFreeDownloadOptions(productId) {
+  const text = await fetchWithRetry(buildProductDataUrl(productId), 3, (url) => fetchProductData(url, productId));
+  return extractFreeDownloadOptions(readProductData(text, productId));
+}
+
 export async function loadBoothDownloadOptions(item) {
   if (!/^\d+$/.test(String(item?.productId || ""))) {
     throw new Error(t("다운로드할 상품 정보가 올바르지 않습니다."));
@@ -1003,10 +1043,15 @@ export async function loadBoothDownloadOptions(item) {
     : [item];
   const locations = [];
   const seenPages = new Set();
+  let hasFreeLocation = false;
 
   for (const candidate of candidates) {
     const sourceConfig = SOURCES.find((entry) => entry.id === candidate?.source);
     if (!sourceConfig) continue;
+    if (candidate.source === "free") {
+      hasFreeLocation = true;
+      continue;
+    }
     const pageUrl = sanitizeSourcePageUrl(
       candidate.sourcePageUrl,
       candidate.source,
@@ -1019,7 +1064,7 @@ export async function loadBoothDownloadOptions(item) {
     locations.push({ source: candidate.source, pageUrl });
   }
 
-  if (!locations.length) {
+  if (!locations.length && !hasFreeLocation) {
     throw new Error(t("다운로드할 상품 정보가 올바르지 않습니다."));
   }
 
@@ -1030,6 +1075,9 @@ export async function loadBoothDownloadOptions(item) {
       pageUrl,
     });
   });
+  if (hasFreeLocation) {
+    results.push({ found: true, options: await loadFreeDownloadOptions(item.productId) });
+  }
 
   const found = results.some((result) => result.found);
   const options = [];
@@ -1086,11 +1134,17 @@ export function getProductSupportMaxAgeMs(productId) {
   return PRODUCT_SUPPORT_MAX_AGE_MS + spreadDays * DAY_MS;
 }
 
+function itemHasFreeSource(item) {
+  return Array.isArray(item?.sources) ? item.sources.includes("free") : item?.source === "free";
+}
+
 export function isProductSupportIndexFresh(item, now = Date.now()) {
   if (item?.supportIndexVersion !== PRODUCT_SUPPORT_INDEX_VERSION
     || !Array.isArray(item?.supportedAvatarIds)) {
     return false;
   }
+  // Free items get their file names from the item JSON during indexing.
+  if (itemHasFreeSource(item) && !item.downloadFiles?.length) return false;
   const indexedAt = Date.parse(item.supportIndexedAt);
   return Number.isFinite(indexedAt)
     && now - indexedAt >= 0
@@ -1135,6 +1189,7 @@ export async function indexBoothProductSupport(items, {
           support: readProductSupport(documentNode, pageUrl),
           profileId: readProductIdentity(documentNode).profileId,
           category: null,
+          freeDownloads: [],
         };
       })());
     }
@@ -1198,7 +1253,7 @@ export async function indexBoothProductSupport(items, {
       }
       let result;
       try {
-        const { support, category } = await loadProductSignals(item.productId);
+        const { support, category, freeDownloads } = await loadProductSignals(item.productId);
         if (!support.descriptionFound) {
           throw new Error(t("상품 설명을 확인하지 못했어요."));
         }
@@ -1219,6 +1274,9 @@ export async function indexBoothProductSupport(items, {
           // The HTML fallback has no category; keep what an earlier sync found.
           productCategory: category ?? item.productCategory ?? null,
         };
+        if (itemHasFreeSource(item) && !item.downloadFiles?.length && freeDownloads?.length) {
+          indexedItem.downloadFiles = freeDownloads.map(({ label, detail }) => ({ label, detail }));
+        }
         if (!linkedProductFailed) {
           indexedItem.supportIndexedAt = new Date(now).toISOString();
           indexedItem.supportIndexVersion = PRODUCT_SUPPORT_INDEX_VERSION;
