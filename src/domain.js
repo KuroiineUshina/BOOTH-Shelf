@@ -696,6 +696,10 @@ export function mergeSupportIndex(currentItems, indexedItems) {
       supportIndexedAt: indexed.supportIndexedAt,
       supportIndexVersion: indexed.supportIndexVersion,
       productCategory: indexed.productCategory ?? item.productCategory ?? null,
+      // Free items have no file list in the library; indexing reads it from the item JSON.
+      ...(!item.downloadFiles?.length && indexed.downloadFiles?.length
+        ? { downloadFiles: indexed.downloadFiles.map((file) => ({ ...file })) }
+        : {}),
     };
   });
 }
