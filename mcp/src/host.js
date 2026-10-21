@@ -7,7 +7,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NativeMessageReader, encodeNativeMessage } from "./native-messaging.js";
 import { createPipePath, createToken, removeSession, writeSession } from "./session.js";
 
-export const ALLOWED_METHODS = Object.freeze(["status", "search_library", "list_files", "download", "download_status"]);
+export const ALLOWED_METHODS = Object.freeze(["status", "sync", "search_library", "list_files", "download", "download_status"]);
 const MAX_PIPE_LINE_BYTES = 256 * 1024;
 const MAX_CONNECTIONS = 8;
 const MAX_PENDING_PER_CONNECTION = 16;

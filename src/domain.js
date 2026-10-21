@@ -652,3 +652,50 @@ export function getFolderPath(folders, folderId) {
 
   return path;
 }
+
+// A fresh sync replaces the item list but keeps favorites, folder placement and
+// the avatar-support index of items that are still owned.
+export function mergeSyncedItems(previousState, items, syncedAt) {
+  const previousItems = new Map(previousState.items.map((item) => [item.key, item]));
+  const mergedItems = items.map((item) => {
+    const previous = previousItems.get(item.key);
+    if (!previous?.supportIndexedAt) return item;
+    return {
+      ...item,
+      supportedAvatarIds: [...(previous.supportedAvatarIds || [])],
+      supportIndexedAt: previous.supportIndexedAt,
+      supportIndexVersion: previous.supportIndexVersion,
+      productCategory: previous.productCategory ?? null,
+    };
+  });
+  const keys = new Set(mergedItems.map((item) => item.key));
+  return {
+    ...previousState,
+    items: mergedItems,
+    lastSyncedAt: syncedAt,
+    favorites: previousState.favorites.filter((key) => keys.has(key)),
+    assignments: Object.fromEntries(
+      Object.keys(previousState.assignments).map((key) => [
+        key,
+        getItemFolderIds(previousState.assignments, key).filter(
+          (folderId) => previousState.folders.some((folder) => folder.id === folderId),
+        ),
+      ]).filter(([key, folderIds]) => keys.has(key) && folderIds.length),
+    ),
+  };
+}
+
+export function mergeSupportIndex(currentItems, indexedItems) {
+  const indexedByKey = new Map(indexedItems.map((item) => [item.key, item]));
+  return currentItems.map((item) => {
+    const indexed = indexedByKey.get(item.key);
+    if (!indexed) return item;
+    return {
+      ...item,
+      supportedAvatarIds: indexed.supportedAvatarIds,
+      supportIndexedAt: indexed.supportIndexedAt,
+      supportIndexVersion: indexed.supportIndexVersion,
+      productCategory: indexed.productCategory ?? item.productCategory ?? null,
+    };
+  });
+}

@@ -1,6 +1,6 @@
 {
   "name": "booth-shelf-mcp",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "Connect AI tools (Claude Code, Codex) to your BOOTH library through the BOOTH Shelf browser extension.",
   "type": "module",
   "license": "GPL-3.0-or-later",

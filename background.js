@@ -2,9 +2,18 @@ import {
   AI_BRIDGE_HOST_NAME,
   AI_BRIDGE_PERMISSIONS,
   AI_BRIDGE_PROTOCOL_VERSION,
+  AiBridgeError,
   createAiBridge,
 } from "./src/ai-bridge.js";
-import { PREFERENCES_KEY, loadPreferences, loadState } from "./src/storage.js";
+import { mergeSupportIndex, mergeSyncedItems } from "./src/domain.js";
+import {
+  PREFERENCES_KEY,
+  loadPreferences,
+  loadState,
+  runLibraryOperation,
+  runSupportIndexOperation,
+  updateState,
+} from "./src/storage.js";
 import { sanitizeDownloadUrl } from "./src/urls.js";
 
 const DASHBOARD_PATH = "dashboard.html";
@@ -13,6 +22,7 @@ const APPROVAL_PATH = "approve.html";
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 const RECONNECT_DELAY_MS = 5_000;
 const CONNECT_TIMEOUT_MS = 4_000;
+const BOOTH_ORIGINS = Object.freeze(["https://accounts.booth.pm/*", "https://booth.pm/*"]);
 
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL(DASHBOARD_PATH) });
@@ -43,19 +53,91 @@ async function ensureOffscreenDocument() {
   await chrome.offscreen.createDocument({
     url: OFFSCREEN_PATH,
     reasons: ["DOM_PARSER"],
-    justification: "Parse BOOTH library pages to list download files for the AI connection.",
+    justification: "Parse BOOTH library pages to sync the library and list download files for the AI connection.",
   });
 }
 
-async function loadDownloadOptions(item) {
+async function callOffscreen(type, payload = {}) {
   await ensureOffscreenDocument();
-  const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "list-download-options", item });
+  const response = await chrome.runtime.sendMessage({ target: "offscreen", type, ...payload });
   if (!response?.ok) {
-    const error = new Error(response?.error || "Could not read BOOTH download files.");
+    const error = new Error(response?.error || "Could not read the BOOTH library.");
     error.code = response?.code || "BOOTH_ERROR";
     throw error;
   }
-  return response.options;
+  return response;
+}
+
+async function loadDownloadOptions(item) {
+  return (await callOffscreen("list-download-options", { item })).options;
+}
+
+function busyError() {
+  return new AiBridgeError(
+    "BUSY",
+    "BOOTH Shelf is already syncing or running another library task in an open window. Try again in a minute.",
+  );
+}
+
+// Same steps as the Full sync button: read every library page, save the list
+// (keeping favorites and folders), then refresh the avatar-support index of
+// new or stale items in the background.
+async function syncLibrary() {
+  if (!(await chrome.permissions.contains({ origins: [...BOOTH_ORIGINS] }))) {
+    throw new AiBridgeError(
+      "PERMISSION_REQUIRED",
+      "BOOTH access is not granted yet. Ask the user to open BOOTH Shelf and press Full sync once.",
+    );
+  }
+  let summary;
+  try {
+    await runLibraryOperation(async () => {
+      const { items, syncedAt, downloadFileCount } = await callOffscreen("sync-library");
+      let previousKeys = new Set();
+      await updateState((latest) => {
+        previousKeys = new Set(latest.items.map((item) => item.key));
+        return mergeSyncedItems(latest, items, syncedAt);
+      });
+      const keys = new Set(items.map((item) => item.key));
+      summary = {
+        itemCount: items.length,
+        syncedAt,
+        downloadFileCount,
+        newItems: items
+          .filter((item) => !previousKeys.has(item.key))
+          .map((item) => ({ productId: item.productId, title: item.title, shop: item.sellerName, sources: item.sources })),
+        removedCount: [...previousKeys].filter((key) => !keys.has(key)).length,
+      };
+    });
+  } catch (error) {
+    if (error?.code === "STATE_BUSY") throw busyError();
+    throw error;
+  }
+  summary.supportIndex = startSupportIndexing() ? "running" : "already_running";
+  return summary;
+}
+
+let supportIndexing = false;
+
+function startSupportIndexing() {
+  if (supportIndexing) return false;
+  supportIndexing = true;
+  runSupportIndexOperation(async () => {
+    const state = await loadState();
+    await callOffscreen("index-support", { items: state.items });
+  })
+    .catch(() => {
+      // An open BOOTH Shelf window may be indexing already; the next sync retries.
+    })
+    .finally(() => {
+      supportIndexing = false;
+    });
+  return true;
+}
+
+function saveSupportCheckpoint(items) {
+  if (!Array.isArray(items)) return Promise.resolve();
+  return updateState((latest) => ({ ...latest, items: mergeSupportIndex(latest.items, items) }));
 }
 
 function requestApproval(request) {
@@ -101,6 +183,7 @@ const bridge = createAiBridge({
   shouldAskApproval: async () => (await loadPreferences().catch(() => null))?.aiApproveDownloads !== false,
   startDownload,
   getDownload,
+  syncLibrary,
   extensionVersion: chrome.runtime.getManifest?.().version || "",
 });
 
@@ -209,6 +292,11 @@ chrome.runtime.onMessage?.addListener((message, sender, sendResponse) => {
   if (message?.type === "ai-bridge-status") {
     refreshBridge({ retry: message.reconnect === true })
       .finally(() => sendResponse({ status: bridgeState.status, error: bridgeState.error }));
+    return true;
+  }
+  if (message?.type === "support-index-checkpoint") {
+    saveSupportCheckpoint(message.items)
+      .then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
     return true;
   }
   if (message?.type === "ai-approval-get") {
